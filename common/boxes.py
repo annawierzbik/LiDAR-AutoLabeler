@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 import numpy as np
+from common.geometry import normalize_angle
 
 # Corner order (same as OpenPCDet boxes_to_corners_3d):
 #   0:+x+y-z  1:+x-y-z  2:-x-y-z  3:-x+y-z   (bottom face)
@@ -58,6 +59,7 @@ class BoundingBox3D:
                 raise ValueError(f"Field '{name}' must be finite, got {getattr(self, name)}")
         if not 0.0 <= self.score <= 1.0:
             raise ValueError(f"Score must be in [0, 1], got {self.score}")
+        self.heading = normalize_angle(self.heading)  # canonical range [-pi, pi)
 
     # ------------------------------------------------------------------ geometry
     @property
