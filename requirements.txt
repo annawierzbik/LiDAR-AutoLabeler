@@ -1,0 +1,24 @@
+# --- Core (versions verified on Windows, Python 3.11.9) ---
+numpy==1.26.4            # numpy 2.x crashes spconv/cumm
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+spconv-cu120==2.3.6
+
+# --- Data / visualization ---
+open3d
+matplotlib
+scipy
+
+# --- OpenPCDet dependencies (SharedArray intentionally left out) ---
+llvmlite
+numba
+tensorboardX
+easydict
+pyyaml
+scikit-image
+tqdm
+opencv-python
+pyquaternion
+
+# --- Dev ---
+pytest
