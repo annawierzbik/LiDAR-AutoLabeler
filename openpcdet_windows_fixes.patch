@@ -1,0 +1,158 @@
+diff --git a/pcdet/ops/ingroup_inds/src/ingroup_inds.cpp b/pcdet/ops/ingroup_inds/src/ingroup_inds.cpp
+index 8bd3389..4038a5e 100644
+--- a/pcdet/ops/ingroup_inds/src/ingroup_inds.cpp
++++ b/pcdet/ops/ingroup_inds/src/ingroup_inds.cpp
+@@ -13,8 +13,8 @@
+ 
+ 
+ void ingroup_inds_launcher(
+-    const long *group_inds_data,
+-    long *out_inds_data,
++    const int64_t *group_inds_data,
++    int64_t *out_inds_data,
+     int N,
+     int max_group_id
+ );
+@@ -36,8 +36,8 @@ void ingroup_inds_gpu(
+   int max_group_id = group_inds.max().item().toLong();
+ 
+ 
+-  long *group_inds_data = group_inds.data_ptr<long>();
+-  long *out_inds_data = out_inds.data_ptr<long>();
++  int64_t *group_inds_data = group_inds.data_ptr<int64_t>();
++  int64_t *out_inds_data = out_inds.data_ptr<int64_t>();
+ 
+   ingroup_inds_launcher(
+       group_inds_data,
+diff --git a/pcdet/ops/ingroup_inds/src/ingroup_inds_kernel.cu b/pcdet/ops/ingroup_inds/src/ingroup_inds_kernel.cu
+index 7882848..568021e 100644
+--- a/pcdet/ops/ingroup_inds/src/ingroup_inds_kernel.cu
++++ b/pcdet/ops/ingroup_inds/src/ingroup_inds_kernel.cu
+@@ -29,15 +29,15 @@ do                                                    \
+ // #define ASSERTION
+ 
+ __global__ void ingroup_inds_kernel(
+-    const long *group_inds,
+-    long *out_inds,
++    const int64_t *group_inds,
++    int64_t *out_inds,
+     int *ingroup_counter,
+     int N
+ ) {
+ 
+   int idx = blockIdx.x * blockDim.x + threadIdx.x;
+   if (idx >= N) return;
+-  long this_group_id = group_inds[idx];
++  int64_t this_group_id = group_inds[idx];
+ 
+   int cnt = atomicAdd(&ingroup_counter[this_group_id], 1);
+   out_inds[idx] = cnt;
+@@ -45,8 +45,8 @@ __global__ void ingroup_inds_kernel(
+ 
+ 
+  void ingroup_inds_launcher(
+-  const long *group_inds,
+-  long *out_inds,
++  const int64_t *group_inds,
++  int64_t *out_inds,
+   int N,
+   int max_group_id
+   ) {
+diff --git a/pcdet/ops/iou3d_nms/src/iou3d_nms.cpp b/pcdet/ops/iou3d_nms/src/iou3d_nms.cpp
+index 179a26c..dac7ca3 100644
+--- a/pcdet/ops/iou3d_nms/src/iou3d_nms.cpp
++++ b/pcdet/ops/iou3d_nms/src/iou3d_nms.cpp
+@@ -142,7 +142,7 @@ int nms_gpu(at::Tensor boxes, at::Tensor keep, float nms_overlap_thresh){
+ 
+     int boxes_num = boxes.size(0);
+     const float * boxes_data = boxes.data<float>();
+-    long * keep_data = keep.data<long>();
++    int64_t * keep_data = keep.data_ptr<int64_t>();
+ 
+     const int col_blocks = DIVUP(boxes_num, THREADS_PER_BLOCK_NMS);
+ 
+@@ -160,8 +160,7 @@ int nms_gpu(at::Tensor boxes, at::Tensor keep, float nms_overlap_thresh){
+ 
+     cudaFree(mask_data);
+ 
+-    unsigned long long remv_cpu[col_blocks];
+-    memset(remv_cpu, 0, col_blocks * sizeof(unsigned long long));
++    std::vector<unsigned long long> remv_cpu(col_blocks, 0);
+ 
+     int num_to_keep = 0;
+ 
+@@ -192,7 +191,7 @@ int nms_normal_gpu(at::Tensor boxes, at::Tensor keep, float nms_overlap_thresh){
+ 
+     int boxes_num = boxes.size(0);
+     const float * boxes_data = boxes.data<float>();
+-    long * keep_data = keep.data<long>();
++    int64_t * keep_data = keep.data_ptr<int64_t>();
+ 
+     const int col_blocks = DIVUP(boxes_num, THREADS_PER_BLOCK_NMS);
+ 
+@@ -210,8 +209,7 @@ int nms_normal_gpu(at::Tensor boxes, at::Tensor keep, float nms_overlap_thresh){
+ 
+     cudaFree(mask_data);
+ 
+-    unsigned long long remv_cpu[col_blocks];
+-    memset(remv_cpu, 0, col_blocks * sizeof(unsigned long long));
++    std::vector<unsigned long long> remv_cpu(col_blocks, 0);
+ 
+     int num_to_keep = 0;
+ 
+diff --git a/pcdet/ops/iou3d_nms/src/iou3d_nms_kernel.cu b/pcdet/ops/iou3d_nms/src/iou3d_nms_kernel.cu
+index aa7efc8..ac6ad3c 100644
+--- a/pcdet/ops/iou3d_nms/src/iou3d_nms_kernel.cu
++++ b/pcdet/ops/iou3d_nms/src/iou3d_nms_kernel.cu
+@@ -11,7 +11,7 @@ All Rights Reserved 2019-2020.
+ 
+ // #define DEBUG
+ const int THREADS_PER_BLOCK_NMS = sizeof(unsigned long long) * 8;
+-const float EPS = 1e-8;
++#define EPS 1e-8f
+ struct Point {
+     float x, y;
+     __device__ Point() {}
+@@ -40,7 +40,7 @@ __device__ inline float cross(const Point &p1, const Point &p2, const Point &p0)
+     return (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
+ }
+ 
+-__device__ int check_rect_cross(const Point &p1, const Point &p2, const Point &q1, const Point &q2){
++__device__ int check_rect_cross_cuda(const Point &p1, const Point &p2, const Point &q1, const Point &q2){
+     int ret = min(p1.x,p2.x) <= max(q1.x,q2.x)  &&
+               min(q1.x,q2.x) <= max(p1.x,p2.x) &&
+               min(p1.y,p2.y) <= max(q1.y,q2.y) &&
+@@ -62,7 +62,7 @@ __device__ inline int check_in_box2d(const float *box, const Point &p){
+ 
+ __device__ inline int intersection(const Point &p1, const Point &p0, const Point &q1, const Point &q0, Point &ans){
+     // fast exclusion
+-    if (check_rect_cross(p0, p1, q0, q1) == 0) return 0;
++    if (check_rect_cross_cuda(p0, p1, q0, q1) == 0) return 0;
+ 
+     // check cross standing
+     float s1 = cross(q0, p1, p0);
+diff --git a/requirements.txt b/requirements.txt
+index a730fd7..d72a9bf 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -8,6 +8,5 @@ pyyaml
+ scikit-image
+ tqdm
+ torchvision
+-SharedArray
+ opencv-python
+ pyquaternion
+\ No newline at end of file
+diff --git a/setup.py b/setup.py
+index f5a31d9..663ac9e 100644
+--- a/setup.py
++++ b/setup.py
+@@ -44,7 +44,7 @@ if __name__ == '__main__':
+             'pyyaml',
+             'scikit-image',
+             'tqdm',
+-            'SharedArray',
++            #'SharedArray',
+             # 'spconv',  # spconv has different names depending on the cuda version
+         ],
+ 
