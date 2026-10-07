@@ -45,11 +45,13 @@ def parse_calib_file(calib_path):
     with open(calib_path, "r") as f:
         for line in f:
             line = line.strip()
-            if not line or ":" not in line:
+            if not line:
                 continue
-            key, value = line.split(":", 1)
-            key = key.strip()
-            numbers = np.array([float(x) for x in value.strip().split()])
+            parts = line.replace(":", " ", 1).split()
+            if len(parts) < 2:
+                continue
+            key = parts[0]
+            numbers = np.array([float(x) for x in parts[1:]])
             
             if numbers.size == 12:
                 calib[key] = numbers.reshape(3, 4)
