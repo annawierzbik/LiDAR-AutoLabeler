@@ -1,3 +1,85 @@
+diff --git a/pcdet/datasets/__init__.py b/pcdet/datasets/__init__.py
+index 47c3900..ff0151a 100644
+--- a/pcdet/datasets/__init__.py
++++ b/pcdet/datasets/__init__.py
+@@ -7,24 +7,20 @@ from pcdet.utils import common_utils
+ 
+ from .dataset import DatasetTemplate
+ from .kitti.kitti_dataset import KittiDataset
+-from .nuscenes.nuscenes_dataset import NuScenesDataset
+-from .waymo.waymo_dataset import WaymoDataset
+-from .pandaset.pandaset_dataset import PandasetDataset
+-from .lyft.lyft_dataset import LyftDataset
+-from .once.once_dataset import ONCEDataset
+-from .argo2.argo2_dataset import Argo2Dataset
+ from .custom.custom_dataset import CustomDataset
+ 
++# (SharedArray, av2, nuscenes-devkit, waymo-open-dataset itd.)
++# from .nuscenes.nuscenes_dataset import NuScenesDataset
++# from .waymo.waymo_dataset import WaymoDataset
++# from .pandaset.pandaset_dataset import PandasetDataset
++# from .lyft.lyft_dataset import LyftDataset
++# from .once.once_dataset import ONCEDataset
++# from .argo2.argo2_dataset import Argo2Dataset
++
+ __all__ = {
+     'DatasetTemplate': DatasetTemplate,
+     'KittiDataset': KittiDataset,
+-    'NuScenesDataset': NuScenesDataset,
+-    'WaymoDataset': WaymoDataset,
+-    'PandasetDataset': PandasetDataset,
+-    'LyftDataset': LyftDataset,
+-    'ONCEDataset': ONCEDataset,
+     'CustomDataset': CustomDataset,
+-    'Argo2Dataset': Argo2Dataset
+ }
+ 
+ 
+diff --git a/pcdet/datasets/augmentor/database_sampler.py b/pcdet/datasets/augmentor/database_sampler.py
+index 105708a..8d5c412 100644
+--- a/pcdet/datasets/augmentor/database_sampler.py
++++ b/pcdet/datasets/augmentor/database_sampler.py
+@@ -5,7 +5,10 @@ import copy
+ import numpy as np
+ from skimage import io
+ import torch
+-import SharedArray
++try:
++    import SharedArray
++except ImportError:  
++    SharedArray = None
+ import torch.distributed as dist
+ 
+ from ...ops.iou3d_nms import iou3d_nms_utils
+diff --git a/pcdet/datasets/waymo/waymo_dataset.py b/pcdet/datasets/waymo/waymo_dataset.py
+index 44632d5..633d8d3 100644
+--- a/pcdet/datasets/waymo/waymo_dataset.py
++++ b/pcdet/datasets/waymo/waymo_dataset.py
+@@ -9,7 +9,10 @@ import copy
+ import numpy as np
+ import torch
+ import multiprocessing
+-import SharedArray
++try:
++    import SharedArray
++except ImportError:  
++    SharedArray = None
+ import torch.distributed as dist
+ from tqdm import tqdm
+ from pathlib import Path
+diff --git a/pcdet/models/model_utils/mppnet_utils.py b/pcdet/models/model_utils/mppnet_utils.py
+index 10641ad..c93d438 100644
+--- a/pcdet/models/model_utils/mppnet_utils.py
++++ b/pcdet/models/model_utils/mppnet_utils.py
+@@ -1,4 +1,7 @@
+-from os import getgrouplist
++try:
++    from os import getgrouplist  
++except ImportError:
++    getgrouplist = None
+ import torch.nn as nn
+ import torch
+ import numpy as np
 diff --git a/pcdet/ops/ingroup_inds/src/ingroup_inds.cpp b/pcdet/ops/ingroup_inds/src/ingroup_inds.cpp
 index 8bd3389..4038a5e 100644
 --- a/pcdet/ops/ingroup_inds/src/ingroup_inds.cpp
@@ -131,6 +213,22 @@ index aa7efc8..ac6ad3c 100644
  
      // check cross standing
      float s1 = cross(q0, p1, p0);
+diff --git a/pcdet/utils/common_utils.py b/pcdet/utils/common_utils.py
+index 1c382b7..2aa64bc 100644
+--- a/pcdet/utils/common_utils.py
++++ b/pcdet/utils/common_utils.py
+@@ -4,7 +4,10 @@ import pickle
+ import random
+ import shutil
+ import subprocess
+-import SharedArray
++try:
++    import SharedArray
++except ImportError: 
++    SharedArray = None
+ 
+ import numpy as np
+ import torch
 diff --git a/requirements.txt b/requirements.txt
 index a730fd7..d72a9bf 100644
 --- a/requirements.txt
