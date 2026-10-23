@@ -1,8 +1,6 @@
 """Console tables for evaluation results."""
 from __future__ import annotations
 
-from typing import Dict
-
 
 def print_detection(summary: dict) -> None:
     print(f"\n=== DETECTION (score >= {summary['score_threshold']} for P/R, AP over all scores) ===")
@@ -28,7 +26,7 @@ def print_tracking(s: dict, title: str = "TRACKING (CLEAR MOT)") -> None:
           f"mostly lost {s['mostly_lost']}/{s['gt_tracks']}")
 
 
-def print_per_sequence(rows: Dict[str, dict]) -> None:
+def print_per_sequence(rows: dict[str, dict]) -> None:
     print("\n=== PER SEQUENCE (tracking) ===")
     print(f"{'seq':<6}{'frames':>7}{'GT obj':>8}{'GT trk':>8}{'MOTA':>8}{'recall':>8}{'prec':>7}{'IDsw':>6}{'frag':>6}")
     for seq, s in rows.items():

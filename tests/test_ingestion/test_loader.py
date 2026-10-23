@@ -1,5 +1,5 @@
-import pytest
 import numpy as np
+import pytest
 
 from ingestion.loader import load_point_cloud, parse_calib_file, parse_tracking_labels
 

@@ -13,7 +13,7 @@ greedily by IoU. A change of the matched track id for one GT object is an ID swi
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -28,11 +28,11 @@ class TrackingEvaluator:
         self.frame = 0
         self.num_gt = self.fn = self.fp = self.idsw = self.frag = self.num_matches = 0
         self.iou_sum = 0.0
-        self.prev_match: Dict[int, int] = {}          # gt id -> track id in previous frame
-        self.last_track_of: Dict[int, int] = {}       # gt id -> last track id ever assigned
-        self.last_frame_tracked: Dict[int, int] = {}  # gt id -> last frame with a match
-        self.gt_lifetime: Dict[int, int] = defaultdict(int)
-        self.gt_tracked: Dict[int, int] = defaultdict(int)
+        self.prev_match: dict[int, int] = {}          # gt id -> track id in previous frame
+        self.last_track_of: dict[int, int] = {}       # gt id -> last track id ever assigned
+        self.last_frame_tracked: dict[int, int] = {}  # gt id -> last frame with a match
+        self.gt_lifetime: dict[int, int] = defaultdict(int)
+        self.gt_tracked: dict[int, int] = defaultdict(int)
 
     def update(
         self,
@@ -52,7 +52,7 @@ class TrackingEvaluator:
                 if g.label != t.label:
                     iou[i, j] = 0.0
 
-        matches: Dict[int, int] = {}  # gt index -> track index
+        matches: dict[int, int] = {}  # gt index -> track index
         used_tracks = set()
 
         # 1. keep matches from the previous frame while still valid
@@ -79,7 +79,7 @@ class TrackingEvaluator:
                 used_tracks.add(j)
 
         # 3. bookkeeping
-        new_prev: Dict[int, int] = {}
+        new_prev: dict[int, int] = {}
         for i, j in matches.items():
             gid, tid = gt[i].track_id, tracks[j].track_id
             if gid in self.last_track_of and self.last_track_of[gid] != tid:

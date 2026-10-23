@@ -8,8 +8,8 @@ separately (see scripts/app.py):
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from open3d.visualization import gui
 
@@ -17,8 +17,8 @@ from open3d.visualization import gui
 class Launcher:
     def __init__(
         self,
-        on_open_folder: Optional[Callable[[Path], Optional[str]]] = None,
-        on_tick: Optional[Callable[[], Optional[str]]] = None,
+        on_open_folder: Callable[[Path], str | None] | None = None,
+        on_tick: Callable[[], str | None] | None = None,
     ) -> None:
         self.on_open_folder = on_open_folder
         self.on_tick = on_tick

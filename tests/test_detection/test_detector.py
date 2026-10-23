@@ -8,14 +8,14 @@ torch = __import__("torch")
 if not torch.cuda.is_available():
     pytest.skip("CUDA not available", allow_module_level=True)
 
-from detection.detector import DEFAULT_CKPT  # noqa: E402
+from detection.detector import DEFAULT_CKPT
 
 if not DEFAULT_CKPT.exists():
     pytest.skip("checkpoint missing", allow_module_level=True)
 
-from common.boxes import BoundingBox3D  # noqa: E402
-from detection.detector import Detector  # noqa: E402
-from ingestion.sequence import SequenceLoader  # noqa: E402
+from common.boxes import BoundingBox3D
+from detection.detector import Detector
+from ingestion.sequence import SequenceLoader
 
 DATA = Path("data/raw")
 

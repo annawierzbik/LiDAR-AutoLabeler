@@ -19,7 +19,11 @@ from pathlib import Path
 
 from evaluation.detection_metrics import DetectionEvaluator
 from evaluation.report import print_detection, print_per_sequence, print_tracking
-from evaluation.runner import available_sequences, evaluate_sequence, parse_sequence_spec
+from evaluation.runner import (
+    available_sequences,
+    evaluate_sequence,
+    parse_sequence_spec,
+)
 from evaluation.tracking_metrics import pool_tracking_summaries
 from verification.paths import RESULTS_DIR
 

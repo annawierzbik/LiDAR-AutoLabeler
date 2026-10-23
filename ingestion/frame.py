@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from typing import Optional
+
 import numpy as np
+
 
 @dataclass
 class Frame:
@@ -9,7 +10,7 @@ class Frame:
     frame_id: int
     points: np.ndarray
     calib: dict = field(default_factory=dict)
-    labels_gt: Optional[list] = None
+    labels_gt: list | None = None
 
     def __post_init__(self):
         if self.points.ndim != 2 or self.points.shape[1] < 3:

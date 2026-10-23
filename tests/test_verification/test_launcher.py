@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("open3d")
 
-from verification.launcher import Launcher  # noqa: E402
+from verification.launcher import Launcher
 
 
 def make(**kw):
@@ -28,7 +28,7 @@ def test_chosen_folder_is_opened_and_status_shown():
 def test_error_when_opening_a_folder_is_shown_not_raised():
     launcher = make(on_open_folder=MagicMock(side_effect=FileNotFoundError("No .bin point cloud files")))
     launcher._folder_chosen("C:/empty")
-    title, text = launcher._dialog.call_args.args
+    _title, text = launcher._dialog.call_args.args
     assert "FileNotFoundError" in text and "No .bin" in text
 
 

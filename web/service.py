@@ -10,8 +10,8 @@ from __future__ import annotations
 import math
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, Optional
 
 import numpy as np
 
@@ -30,7 +30,7 @@ class SessionClosed(LookupError):
     """The session was finished; it no longer accepts actions."""
 
 
-def _actions() -> Dict[str, Callable[[ReviewController], object]]:
+def _actions() -> dict[str, Callable[[ReviewController], object]]:
     return {
         "next": lambda c: c.next_frame(),
         "prev": lambda c: c.prev_frame(),
@@ -72,7 +72,7 @@ def _required(name: str, args: dict, field: str):
 
 
 class ReviewService:
-    def __init__(self, session: AnnotationSession, loader, save_path: Optional[Path] = None) -> None:
+    def __init__(self, session: AnnotationSession, loader, save_path: Path | None = None) -> None:
         self.session = session
         self.loader = loader
         self.save_path = Path(save_path) if save_path else None
@@ -80,8 +80,8 @@ class ReviewService:
         self._actions = _actions()
         self._lock = threading.RLock()   # re-entrant: act() calls state() while holding it
         self._saved_revision = session.revision
-        self._cache: "OrderedDict[int, bytes]" = OrderedDict()
-        self.save_error: Optional[str] = None  # last autosave failure, shown in the browser
+        self._cache: OrderedDict[int, bytes] = OrderedDict()
+        self.save_error: str | None = None  # last autosave failure, shown in the browser
         self.closed = False
 
     # ------------------------------------------------------------------ queries

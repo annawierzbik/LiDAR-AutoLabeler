@@ -11,7 +11,6 @@ from __future__ import annotations
 import math
 import time
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 import open3d as o3d
@@ -72,7 +71,7 @@ class VerificationApp:
         self._last_tick = 0.0
         self._updating = False      # True while we set widget values from code
         self._saved_revision = session.revision
-        self._box_names: List[str] = []
+        self._box_names: list[str] = []
         self._labels: list = []
         self._has_points = False
         self.closed = True          # becomes False in show(), True again when the window is closed
@@ -210,7 +209,7 @@ class VerificationApp:
         w.set_on_tick_event(self._on_tick)
         w.set_on_close(self._on_close)
 
-    def _button(self, text: str, callback) -> "gui.Button":
+    def _button(self, text: str, callback) -> gui.Button:
         b = gui.Button(text)
         b.set_on_clicked(callback)
         return b
@@ -407,7 +406,7 @@ class VerificationApp:
         return True
 
     # ------------------------------------------------------------------ keys
-    def _on_key(self, event) -> "gui.Widget.EventCallbackResult":
+    def _on_key(self, event) -> gui.Widget.EventCallbackResult:
         handled, ignored = gui.Widget.EventCallbackResult.HANDLED, gui.Widget.EventCallbackResult.IGNORED
         if event.type != gui.KeyEvent.Type.DOWN:
             return ignored

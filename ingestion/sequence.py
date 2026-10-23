@@ -1,7 +1,9 @@
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
+
 from .frame import Frame
 from .loader import load_point_cloud, parse_calib_file, parse_tracking_labels
+
 
 class SequenceLoader:
     def __init__(self, data_root, split, sequence):

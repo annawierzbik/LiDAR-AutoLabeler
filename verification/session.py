@@ -13,13 +13,14 @@ from __future__ import annotations
 import contextlib
 import json
 import time
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from common.boxes import BoundingBox3D
 from verification.interpolation import MAX_GAP, fill_plan
+import itertools
 
 SESSION_VERSION = 1
 EDITABLE_FIELDS = ("x", "y", "z", "dx", "dy", "dz", "heading", "label")
@@ -44,14 +45,14 @@ class Annotation:
     box: BoundingBox3D
     status: Status = Status.PENDING
 
-    def with_status(self, status: Status) -> "Annotation":
+    def with_status(self, status: Status) -> Annotation:
         return replace(self, status=status)
 
     def to_dict(self) -> dict:
         return {"box": asdict(self.box), "status": self.status.value}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Annotation":
+    def from_dict(cls, d: dict) -> Annotation:
         return cls(BoundingBox3D(**d["box"]), Status(d["status"]))
 
 
@@ -59,7 +60,7 @@ class Annotation:
 class Event:
     t: float
     action: str
-    frame: Optional[int] = None
+    frame: int | None = None
     detail: dict = field(default_factory=dict)
 
 
@@ -79,10 +80,10 @@ class AnnotationSession:
         self.mode = mode
         self.frame_offset = frame_offset  # session frame i == sequence frame i + offset
         self._clock = clock
-        self.frames: Dict[int, List[Annotation]] = {i: [] for i in range(num_frames)}
-        self.events: List[Event] = []
-        self._undo: List[Tuple[str, Dict[int, List[Annotation]]]] = []
-        self._redo: List[Tuple[str, Dict[int, List[Annotation]]]] = []
+        self.frames: dict[int, list[Annotation]] = {i: [] for i in range(num_frames)}
+        self.events: list[Event] = []
+        self._undo: list[tuple[str, dict[int, list[Annotation]]]] = []
+        self._redo: list[tuple[str, dict[int, list[Annotation]]]] = []
         self._next_track_id = 0
         self.max_gap = MAX_GAP  # longest hole in a track that gets filled automatically
         self.revision = 0  # bumped by every change of the annotations (edit, undo, ...) -> autosave trigger
@@ -95,7 +96,7 @@ class AnnotationSession:
         mode: str = "assisted",
         frame_offset: int = 0,
         clock: Callable[[], float] = time.time,
-    ) -> "AnnotationSession":
+    ) -> AnnotationSession:
         """`results[i]` = tracked boxes (with track_id) of session frame i. In manual mode
         they are ignored: the session starts empty."""
         s = cls(sequence, len(results), mode, frame_offset, clock)
@@ -111,10 +112,10 @@ class AnnotationSession:
         return s
 
     # ------------------------------------------------------------------ reading
-    def annotations(self, frame: int) -> List[Annotation]:
+    def annotations(self, frame: int) -> list[Annotation]:
         return list(self.frames[self._check(frame)])
 
-    def final_boxes(self, frame: int, include_pending: bool = False) -> List[BoundingBox3D]:
+    def final_boxes(self, frame: int, include_pending: bool = False) -> list[BoundingBox3D]:
         keep = INCLUDED + ((Status.PENDING,) if include_pending else ())
         return [a.box for a in self.frames[self._check(frame)] if a.status in keep]
 
@@ -131,9 +132,9 @@ class AnnotationSession:
     def frame_has_pending(self, frame: int) -> bool:
         return any(a.status in NEEDS_REVIEW for a in self.frames[self._check(frame)])
 
-    def next_pending_frame(self, frame: int) -> Optional[int]:
+    def next_pending_frame(self, frame: int) -> int | None:
         """First frame after `frame` (wrapping around) that still has pending boxes."""
-        order = list(range(frame + 1, self.num_frames)) + list(range(0, frame + 1))
+        order = list(range(frame + 1, self.num_frames)) + list(range(frame + 1))
         return next((f for f in order if self.frame_has_pending(f)), None)
 
     def new_track_id(self) -> int:
@@ -154,7 +155,7 @@ class AnnotationSession:
         return anns[idx]
 
     @contextlib.contextmanager
-    def _transaction(self, label: str, frames: Iterable[int], refill_track: Optional[int] = None,
+    def _transaction(self, label: str, frames: Iterable[int], refill_track: int | None = None,
                      **detail) -> Iterator[None]:
         """Undo/redo + event-log wrapper. With `refill_track` the interpolated boxes of that track
         are recomputed after the change, inside the same undo step."""
@@ -171,13 +172,13 @@ class AnnotationSession:
             self.log(label, frame=changed[0] if len(changed) == 1 else None, **detail)
 
     # ---------------------------------------------------------- gap filling
-    def _track_ids(self) -> List[int]:
+    def _track_ids(self) -> list[int]:
         return sorted({a.box.track_id for anns in self.frames.values() for a in anns
                        if a.box.track_id is not None})
 
     def _fill_track(self, track_id: int) -> None:
         """Recompute the INTERPOLATED boxes of one track (in place, not undoable by itself)."""
-        keys: Dict[int, BoundingBox3D] = {}
+        keys: dict[int, BoundingBox3D] = {}
         blocked = set()  # frames where the track already has a real (or rejected) box
         for f, anns in self.frames.items():
             for a in anns:
@@ -248,7 +249,7 @@ class AnnotationSession:
                                track_id=a.box.track_id, fields=sorted(fields)):
             self.frames[frame][idx] = Annotation(new_box, status)
 
-    def add_manual(self, frame: int, box: BoundingBox3D, track_id: Optional[int] = None) -> int:
+    def add_manual(self, frame: int, box: BoundingBox3D, track_id: int | None = None) -> int:
         """Add a human-drawn box. Gets a fresh track id unless one is given. Returns its index."""
         tid = track_id if track_id is not None else (
             box.track_id if box.track_id is not None else self.new_track_id())
@@ -269,7 +270,7 @@ class AnnotationSession:
         return self.add_manual(target, a.box, track_id=tid)
 
     # -------------------------------------------------------------- undo / redo
-    def _swap(self, source: list, destination: list, label: str) -> Optional[str]:
+    def _swap(self, source: list, destination: list, label: str) -> str | None:
         if not source:
             return None
         name, saved = source.pop()
@@ -281,21 +282,21 @@ class AnnotationSession:
         self.log(label, frame=min(saved) if len(saved) == 1 else None, undone=name)
         return name
 
-    def undo(self) -> Optional[str]:
+    def undo(self) -> str | None:
         return self._swap(self._undo, self._redo, "undo")
 
-    def redo(self) -> Optional[str]:
+    def redo(self) -> str | None:
         return self._swap(self._redo, self._undo, "redo")
 
     # ------------------------------------------------------------------ logging
-    def log(self, action: str, frame: Optional[int] = None, **detail) -> None:
+    def log(self, action: str, frame: int | None = None, **detail) -> None:
         self.events.append(Event(self._clock(), action, frame, detail))
 
     def active_seconds(self, max_gap: float = 30.0) -> float:
         """Time spent working: sum of gaps between consecutive events, ignoring gaps longer than
         `max_gap` seconds (breaks, coffee)."""
         ts = [e.t for e in self.events]
-        return sum(b - a for a, b in zip(ts, ts[1:]) if b - a <= max_gap)
+        return sum(b - a for a, b in itertools.pairwise(ts) if b - a <= max_gap)
 
     # --------------------------------------------------------------------- I/O
     def save(self, path) -> None:
@@ -314,7 +315,7 @@ class AnnotationSession:
         tmp.replace(path)  # atomic: a crash while saving cannot corrupt the previous file
 
     @classmethod
-    def load(cls, path, clock: Callable[[], float] = time.time) -> "AnnotationSession":
+    def load(cls, path, clock: Callable[[], float] = time.time) -> AnnotationSession:
         data = json.loads(Path(path).read_text())
         if data.get("version") != SESSION_VERSION:
             raise ValueError(f"unsupported session version {data.get('version')}")

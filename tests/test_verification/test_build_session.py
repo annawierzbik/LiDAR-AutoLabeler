@@ -35,7 +35,7 @@ def args(folder, **kw):
 
 
 def test_manual_mode_starts_empty_without_running_a_detector(clouds):
-    session, seq, path = build_session(args(clouds, mode="manual", start=2, stop=6))
+    session, _seq, path = build_session(args(clouds, mode="manual", start=2, stop=6))
     assert session.num_frames == 4 and session.frame_offset == 2 and session.stats()["total"] == 0
     assert path.name.endswith("_f2-6_manual.json")
     assert path.parent == verification.paths.RESULTS_DIR / "sessions"
@@ -50,7 +50,7 @@ def test_results_dir_does_not_depend_on_the_working_directory():
 def test_assisted_mode_slices_cached_detections(clouds):
     key = folder_key(clouds)
     results = [[box(10 + i, 0)] for i in range(10)]
-    save_results(verification.paths.RESULTS_DIR / f"{key}.json", range(0, 10), results)
+    save_results(verification.paths.RESULTS_DIR / f"{key}.json", range(10), results)
     session, _, _ = build_session(args(clouds, start=3, stop=7))
     assert session.num_frames == 4 and session.frame_offset == 3
     assert session.annotations(0)[0].box.x == 13 and session.annotations(3)[0].box.x == 16

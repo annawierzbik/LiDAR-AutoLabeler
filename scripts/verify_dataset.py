@@ -1,5 +1,5 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Dodaj główny katalog projektu do ścieżki, aby móc importować moduły ze src
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -21,7 +21,7 @@ def verify_kitti_sequence(data_root: str, split: str, sequence: str) -> bool:
         print(f"  [ERROR] Velodyne directory missing: {velodyne_dir}")
         return False
     
-    bin_files = sorted(list(velodyne_dir.glob("*.bin")))
+    bin_files = sorted(velodyne_dir.glob("*.bin"))
     if not bin_files:
         print(f"  [ERROR] No .bin point cloud files found in {velodyne_dir}")
         return False

@@ -9,8 +9,6 @@ Frames:
 """
 from __future__ import annotations
 
-from typing import Dict, Tuple
-
 import numpy as np
 
 from ingestion.loader import parse_calib_file
@@ -34,12 +32,12 @@ class Calibration:
         self.cam_to_velo_mat = np.linalg.inv(self.velo_to_cam_mat)
 
     @classmethod
-    def from_file(cls, path) -> "Calibration":
+    def from_file(cls, path) -> Calibration:
         """Load a KITTI calibration text file."""
         return cls.from_dict(parse_calib_file(path))
 
     @classmethod
-    def from_dict(cls, calib: Dict[str, np.ndarray]) -> "Calibration":
+    def from_dict(cls, calib: dict[str, np.ndarray]) -> Calibration:
         """Build from the dict returned by `parse_calib_file` (tracking or detection naming)."""
         c = {k.strip().rstrip(":"): np.asarray(v, dtype=np.float64) for k, v in calib.items()}
 
@@ -68,7 +66,7 @@ class Calibration:
     def cam_to_velo(self, pts: np.ndarray) -> np.ndarray:
         return self._apply(self.cam_to_velo_mat, pts)
 
-    def velo_to_image(self, pts: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def velo_to_image(self, pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Returns (uv (N,2) pixels, depth (N,)) of LiDAR points in the left color image."""
         cam = self.velo_to_cam(pts)
         homo = np.hstack([cam, np.ones((len(cam), 1))])

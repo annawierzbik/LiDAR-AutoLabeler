@@ -19,7 +19,6 @@ import time
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 
@@ -32,8 +31,10 @@ KEY_SPACE, KEY_R, KEY_RIGHT, KEY_LEFT = 32, 82, 262, 263
 
 
 # ----------------------------------------------------------------- computation
-def track_sequence(seq: SequenceLoader, indices: range, threshold: float) -> List[List[BoundingBox3D]]:
-    from detection.detector import Detector  # heavy import (torch + pcdet), only when needed
+def track_sequence(seq: SequenceLoader, indices: range, threshold: float) -> list[list[BoundingBox3D]]:
+    from detection.detector import (
+        Detector,  # heavy import (torch + pcdet), only when needed
+    )
 
     detector = Detector(score_threshold=threshold)
     tracker = Tracker()
@@ -46,7 +47,7 @@ def track_sequence(seq: SequenceLoader, indices: range, threshold: float) -> Lis
     return results
 
 
-def save_results(path: Path, indices: range, results: List[List[BoundingBox3D]]) -> None:
+def save_results(path: Path, indices: range, results: list[list[BoundingBox3D]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "start": indices.start, "stop": indices.stop,
@@ -62,9 +63,9 @@ def load_results(path: Path):
     return indices, results
 
 
-def print_stats(results: List[List[BoundingBox3D]]) -> None:
+def print_stats(results: list[list[BoundingBox3D]]) -> None:
     lengths: Counter = Counter()
-    labels: Dict[int, str] = {}
+    labels: dict[int, str] = {}
     for boxes in results:
         for b in boxes:
             lengths[b.track_id] += 1
@@ -80,7 +81,7 @@ def print_stats(results: List[List[BoundingBox3D]]) -> None:
 
 
 # ---------------------------------------------------------------- visualization
-def id_color(track_id: int) -> List[float]:
+def id_color(track_id: int) -> list[float]:
     """Stable, well separated color per track id (golden-ratio hue walk)."""
     hue = (track_id * 0.61803398875) % 1.0
     return list(colorsys.hsv_to_rgb(hue, 0.85, 1.0))

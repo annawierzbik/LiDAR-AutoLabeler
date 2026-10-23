@@ -10,11 +10,10 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-
-from detection.detector import Detector  # imports torch first
 import open3d as o3d
 
 from common.boxes import EDGES, BoundingBox3D
+from detection.detector import Detector  # imports torch first
 from ingestion.sequence import SequenceLoader
 
 CLASS_COLORS = {
@@ -31,7 +30,7 @@ def height_colors(xyz: np.ndarray) -> np.ndarray:
     return np.stack([0.2 + 0.8 * t, 0.3 + 0.5 * t, 1.0 - 0.7 * t], axis=1)
 
 
-def box_lineset(box: BoundingBox3D) -> "o3d.geometry.LineSet":
+def box_lineset(box: BoundingBox3D) -> o3d.geometry.LineSet:
     ls = o3d.geometry.LineSet()
     ls.points = o3d.utility.Vector3dVector(box.corners)
     ls.lines = o3d.utility.Vector2iVector(EDGES)

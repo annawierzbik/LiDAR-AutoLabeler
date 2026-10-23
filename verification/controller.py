@@ -6,8 +6,6 @@ accept/reject, nudging, adding boxes, ...) lives here so it can be unit tested w
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 from common.boxes import BoundingBox3D
 from verification.session import NEEDS_REVIEW, Annotation, AnnotationSession, Status
 
@@ -24,7 +22,7 @@ class ReviewController:
         self.session = session
         self.ground_z = ground_z
         self.frame = 0
-        self.selected: Optional[int] = None
+        self.selected: int | None = None
         self.current_class = "Car"
         self.show_rejected = False
 
@@ -33,15 +31,15 @@ class ReviewController:
     def num_frames(self) -> int:
         return self.session.num_frames
 
-    def annotations(self) -> List[Annotation]:
+    def annotations(self) -> list[Annotation]:
         return self.session.annotations(self.frame)
 
-    def visible(self) -> List[Tuple[int, Annotation]]:
+    def visible(self) -> list[tuple[int, Annotation]]:
         """(index, annotation) pairs to draw in the current frame."""
         return [(i, a) for i, a in enumerate(self.annotations())
                 if self.show_rejected or a.status is not Status.REJECTED]
 
-    def selected_annotation(self) -> Optional[Annotation]:
+    def selected_annotation(self) -> Annotation | None:
         anns = self.annotations()
         return anns[self.selected] if self.selected is not None and self.selected < len(anns) else None
 
@@ -74,7 +72,7 @@ class ReviewController:
         return target is not None and self.goto(target)
 
     # ---------------------------------------------------------------- selection
-    def select(self, idx: Optional[int]) -> None:
+    def select(self, idx: int | None) -> None:
         self.selected = idx if idx is None or 0 <= idx < len(self.annotations()) else None
 
     def select_step(self, step: int = 1) -> None:
@@ -139,12 +137,12 @@ class ReviewController:
         n = self.session.reject_track(a.box.track_id, self.frame if from_here else 0)
         return n
 
-    def undo(self) -> Optional[str]:
+    def undo(self) -> str | None:
         name = self.session.undo()
         self._clamp_selection()
         return name
 
-    def redo(self) -> Optional[str]:
+    def redo(self) -> str | None:
         name = self.session.redo()
         self._clamp_selection()
         return name
@@ -196,7 +194,7 @@ class ReviewController:
             self.set_field("label", label)
 
     # ------------------------------------------------------------ adding boxes
-    def add_box(self, label: Optional[str] = None) -> int:
+    def add_box(self, label: str | None = None) -> int:
         """Add a human box standing on the ground at DEFAULT_SPAWN."""
         label = label or self.current_class
         l, w, h = DEFAULT_DIMS[label]

@@ -11,11 +11,11 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, List, Optional
 
-import torch  # noqa: F401  (must come before pcdet)
 import numpy as np
+import torch
 
 from common.boxes import BoundingBox3D
 from ingestion.frame import Frame
@@ -28,10 +28,10 @@ DEFAULT_CKPT = PROJECT_ROOT / "checkpoints" / "pointpillar_7728.pth"
 if str(OPENPCDET_ROOT) not in sys.path:  # allows use without `pip install -e`
     sys.path.insert(0, str(OPENPCDET_ROOT))
 
-from pcdet.config import cfg, cfg_from_yaml_file  # noqa: E402
-from pcdet.datasets import DatasetTemplate  # noqa: E402
-from pcdet.models import build_network, load_data_to_gpu  # noqa: E402
-from pcdet.utils import common_utils  # noqa: E402
+from pcdet.config import cfg, cfg_from_yaml_file
+from pcdet.datasets import DatasetTemplate
+from pcdet.models import build_network, load_data_to_gpu
+from pcdet.utils import common_utils
 
 
 @contextlib.contextmanager
@@ -57,7 +57,7 @@ class _InMemoryDataset(DatasetTemplate):
             root_path=None,
             logger=logger,
         )
-        self._points: Optional[np.ndarray] = None
+        self._points: np.ndarray | None = None
 
     def set_points(self, points: np.ndarray) -> None:
         self._points = points
@@ -94,7 +94,7 @@ class Detector:
         with _chdir(cfg_file.parents[2]):  # .../tools
             cfg_from_yaml_file(str(cfg_file), cfg)
         cfg.MODEL.POST_PROCESSING.SCORE_THRESH = score_threshold
-        self.class_names: List[str] = list(cfg.CLASS_NAMES)
+        self.class_names: list[str] = list(cfg.CLASS_NAMES)
 
         self.dataset = _InMemoryDataset(cfg.DATA_CONFIG, self.class_names, self.logger)
         self.model = build_network(
@@ -107,7 +107,7 @@ class Detector:
         self.model.eval()
 
     @torch.no_grad()
-    def predict(self, frame: Frame) -> List[BoundingBox3D]:
+    def predict(self, frame: Frame) -> list[BoundingBox3D]:
         """Detect objects in one frame. Boxes are in the LiDAR frame."""
         points = np.ascontiguousarray(frame.points[:, :4], dtype=np.float32)
         if points.shape[1] < 4:

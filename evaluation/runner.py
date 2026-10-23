@@ -10,7 +10,6 @@ import json
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import List, Optional
 
 from common.boxes import BoundingBox3D
 from evaluation.detection_metrics import DetectionEvaluator
@@ -34,7 +33,7 @@ def _get_detector():
     return _detector
 
 
-def run_detector(seq: SequenceLoader, indices: range) -> List[List[BoundingBox3D]]:
+def run_detector(seq: SequenceLoader, indices: range) -> list[list[BoundingBox3D]]:
     detector = _get_detector()
     out, t0 = [], time.time()
     for n, i in enumerate(indices, 1):
@@ -44,7 +43,7 @@ def run_detector(seq: SequenceLoader, indices: range) -> List[List[BoundingBox3D
     return out
 
 
-def load_or_detect(seq, indices: range, cache: Path, use_cache: bool) -> List[List[BoundingBox3D]]:
+def load_or_detect(seq, indices: range, cache: Path, use_cache: bool) -> list[list[BoundingBox3D]]:
     if use_cache and cache.exists():
         data = json.loads(cache.read_text())
         if data["start"] == indices.start and data["stop"] == indices.stop:
@@ -60,11 +59,11 @@ def load_or_detect(seq, indices: range, cache: Path, use_cache: bool) -> List[Li
     return dets
 
 
-def parse_sequence_spec(spec: str, available: List[str]) -> List[str]:
+def parse_sequence_spec(spec: str, available: list[str]) -> list[str]:
     """'all' | '0,3,5' | '0-5' | '0-2,7' -> zero-padded ids that exist in `available`."""
     if spec.strip().lower() == "all":
         return list(available)
-    wanted: List[str] = []
+    wanted: list[str] = []
     for part in spec.split(","):
         part = part.strip()
         if not part:
@@ -80,7 +79,7 @@ def parse_sequence_spec(spec: str, available: List[str]) -> List[str]:
     return [w for w in wanted if w in available]
 
 
-def available_sequences(data_root: Path, split: str) -> List[str]:
+def available_sequences(data_root: Path, split: str) -> list[str]:
     vel = Path(data_root) / split / "velodyne"
     return sorted(p.name for p in vel.iterdir() if p.is_dir()) if vel.exists() else []
 
@@ -93,8 +92,8 @@ def evaluate_sequence(
     use_cache: bool,
     det_eval: DetectionEvaluator,
     start: int = 0,
-    stop: Optional[int] = None,
-) -> Optional[dict]:
+    stop: int | None = None,
+) -> dict | None:
     """Returns the tracking summary of this sequence (None if it has no labels).
     Detection results are accumulated into `det_eval`."""
     root = Path(data_root) / split

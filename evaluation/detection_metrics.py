@@ -13,7 +13,7 @@ published ones and should only be compared with each other (before/after fine-tu
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Sequence, Tuple
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -28,15 +28,15 @@ class DetectionEvaluator:
     def __init__(
         self,
         classes: Sequence[str] = CLASSES,
-        iou_thresholds: Dict[str, float] = None,
+        iou_thresholds: dict[str, float] | None = None,
         ignore_iou: float = 0.3,
     ) -> None:
         self.classes = tuple(classes)
         self.iou_thresholds = dict(DEFAULT_IOU_THRESHOLDS if iou_thresholds is None else iou_thresholds)
         self.ignore_iou = ignore_iou
-        self.n_gt: Dict[str, int] = defaultdict(int)
-        self.records: Dict[str, List[Tuple[float, bool]]] = defaultdict(list)  # (score, is_tp)
-        self.tp_ious: Dict[str, List[float]] = defaultdict(list)
+        self.n_gt: dict[str, int] = defaultdict(int)
+        self.records: dict[str, list[tuple[float, bool]]] = defaultdict(list)  # (score, is_tp)
+        self.tp_ious: dict[str, list[float]] = defaultdict(list)
 
     def update(
         self,
@@ -86,7 +86,7 @@ class DetectionEvaluator:
             ap += precision[mask].max() if mask.any() else 0.0
         return float(ap / 40)
 
-    def precision_recall(self, cls: str, score_threshold: float) -> Tuple[float, float]:
+    def precision_recall(self, cls: str, score_threshold: float) -> tuple[float, float]:
         kept = [(s, t) for s, t in self.records[cls] if s >= score_threshold]
         tp = sum(1 for _, t in kept if t)
         fp = len(kept) - tp

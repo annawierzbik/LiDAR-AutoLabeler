@@ -11,8 +11,8 @@ import argparse
 import logging
 import threading
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, Optional
 
 from web.service import ReviewService
 
@@ -24,7 +24,7 @@ class Job:
         self.sid = sid
         self.status = "loading"      # loading -> ready
         self.message = ""
-        self.service: Optional[ReviewService] = None
+        self.service: ReviewService | None = None
         self.title = ""
 
     def view(self) -> dict:
@@ -48,11 +48,11 @@ def make_args(**overrides) -> argparse.Namespace:
 
 
 class SessionManager:
-    def __init__(self, builder: Optional[Callable] = None, background: bool = True) -> None:
+    def __init__(self, builder: Callable | None = None, background: bool = True) -> None:
         self.builder = builder or default_builder
         self.background = background            # tests build synchronously
-        self.jobs: Dict[str, Job] = {}
-        self.by_path: Dict[str, ReviewService] = {}
+        self.jobs: dict[str, Job] = {}
+        self.by_path: dict[str, ReviewService] = {}
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ jobs

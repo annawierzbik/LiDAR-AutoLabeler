@@ -11,7 +11,6 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,7 +31,7 @@ def main() -> None:
         proc = current["proc"]
         return proc is not None and proc.poll() is None
 
-    def open_folder(path: Path) -> Optional[str]:
+    def open_folder(path: Path) -> str | None:
         if folder_busy():
             return "A verification window is already open (close it first)."
         frames = validate_folder(path)   # raises a readable error for folders that cannot be used
@@ -41,7 +40,7 @@ def main() -> None:
         return (f"Opening {path.name} ({frames} frames)... if detection has to run first it takes "
                 "a while (progress in the terminal).")
 
-    def poll() -> Optional[str]:
+    def poll() -> str | None:
         proc = current["proc"]
         if proc is None or proc.poll() is None:
             return None

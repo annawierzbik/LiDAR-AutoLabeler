@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import List
 
 from .frame import Frame
 from .loader import load_point_cloud
@@ -20,7 +19,7 @@ def _natural_key(path: Path):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", path.name)]
 
 
-def frame_files(folder) -> List[Path]:
+def frame_files(folder) -> list[Path]:
     return sorted(Path(folder).glob("*.bin"), key=_natural_key)
 
 

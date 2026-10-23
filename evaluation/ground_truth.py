@@ -6,7 +6,7 @@ A label dict (from `parse_tracking_labels`) has keys:
 """
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -39,7 +39,7 @@ def label_to_box(label: dict, calib: Calibration, label_name: str) -> BoundingBo
 
 def load_frame_gt(
     labels: Sequence[dict], calib: Calibration
-) -> Tuple[List[BoundingBox3D], List[BoundingBox3D]]:
+) -> tuple[list[BoundingBox3D], list[BoundingBox3D]]:
     """Returns (evaluated ground truth, ignore regions) for one frame, in LiDAR frame."""
     gt, ignore = [], []
     for lab in labels:
@@ -56,7 +56,7 @@ def load_frame_gt(
 
 def filter_to_camera_fov(
     boxes: Sequence[BoundingBox3D], calib: Calibration
-) -> List[BoundingBox3D]:
+) -> list[BoundingBox3D]:
     """KITTI labels only exist where the camera sees, but the LiDAR (and our
     detector) covers 360 deg. Detections outside the image would all count as
     false positives, so they are dropped before evaluation."""

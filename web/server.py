@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -26,9 +25,9 @@ STATIC = Path(__file__).parent / "static"
 
 class Action(BaseModel):
     name: str
-    frame: Optional[int] = None
-    index: Optional[int] = None
-    label: Optional[str] = None
+    frame: int | None = None
+    index: int | None = None
+    label: str | None = None
 
 
 class FolderRequest(BaseModel):

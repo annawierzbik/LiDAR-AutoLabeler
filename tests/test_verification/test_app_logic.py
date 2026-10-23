@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 
 pytest.importorskip("open3d")
-from open3d.visualization import gui  # noqa: E402
+from open3d.visualization import gui
 
-from common.boxes import BoundingBox3D  # noqa: E402
-from verification.app import VerificationApp  # noqa: E402
-from verification.session import AnnotationSession, Status  # noqa: E402
+from common.boxes import BoundingBox3D
+from verification.app import VerificationApp
+from verification.session import AnnotationSession, Status
 
 K = gui.KeyName
 

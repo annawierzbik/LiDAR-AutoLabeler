@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -29,7 +28,7 @@ class Track:
     misses: int = 0  # consecutive frames without a match
 
     @classmethod
-    def from_box(cls, box: BoundingBox3D, track_id: int) -> "Track":
+    def from_box(cls, box: BoundingBox3D, track_id: int) -> Track:
         return cls(
             track_id=track_id,
             label=box.label,
@@ -82,11 +81,11 @@ class Tracker:
         self.reset()
 
     def reset(self) -> None:
-        self.tracks: List[Track] = []
+        self.tracks: list[Track] = []
         self._next_id = 0
         self.frame_count = 0
 
-    def update(self, detections: List[BoundingBox3D]) -> List[BoundingBox3D]:
+    def update(self, detections: list[BoundingBox3D]) -> list[BoundingBox3D]:
         """Process one frame; returns confirmed boxes with `track_id` set."""
         self.frame_count += 1
 

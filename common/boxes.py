@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Optional
 
 import numpy as np
+
 from common.geometry import normalize_angle
 
 # Corner order (same as OpenPCDet boxes_to_corners_3d):
@@ -46,7 +46,7 @@ class BoundingBox3D:
     heading: float
     label: str
     score: float = 1.0
-    track_id: Optional[int] = None
+    track_id: int | None = None
 
     def __post_init__(self) -> None:
         if min(self.dx, self.dy, self.dz) <= 0:
@@ -83,7 +83,7 @@ class BoundingBox3D:
         return local @ rot.T + self.center
 
     # ------------------------------------------------------------------ helpers
-    def with_track_id(self, track_id: Optional[int]) -> "BoundingBox3D":
+    def with_track_id(self, track_id: int | None) -> BoundingBox3D:
         return replace(self, track_id=track_id)
 
     def to_array(self) -> np.ndarray:
@@ -99,8 +99,8 @@ class BoundingBox3D:
         arr,
         label: str,
         score: float = 1.0,
-        track_id: Optional[int] = None,
-    ) -> "BoundingBox3D":
+        track_id: int | None = None,
+    ) -> BoundingBox3D:
         arr = np.asarray(arr, dtype=np.float64).reshape(-1)
         if arr.shape[0] != 7:
             raise ValueError(f"Expected 7 values, got {arr.shape[0]}")
