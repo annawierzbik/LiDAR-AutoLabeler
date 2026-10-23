@@ -17,6 +17,7 @@ import numpy as np
 
 from verification.controller import CLASSES, ReviewController
 from verification.session import AnnotationSession
+from export import ExportResult, export_session
 
 MOVE_STEP, Z_STEP, ROT_STEP, SIZE_STEP = 0.10, 0.05, math.radians(2.0), 0.10  # same steps as the desktop UI
 CACHE_FRAMES = 8
@@ -113,6 +114,11 @@ class ReviewService:
         """One value per frame for the timeline: 0 = no boxes, 1 = boxes still to review, 2 = all reviewed."""
         s = self.session
         return [1 if s.frame_has_pending(f) else (2 if s.annotations(f) else 0) for f in range(s.num_frames)]
+
+    def export(self, fmt: str, include_unreviewed: bool = False, include_empty: bool = False) -> ExportResult:
+        """Verified boxes as label files. Raises export.ExportError if the format is not possible here."""
+        with self._lock:
+            return export_session(self.session, self.loader, fmt, include_unreviewed, include_empty)
 
     def points(self, frame: int) -> bytes:
         """Raw little-endian float32 (N, 3) x y z of one session frame."""

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from web.manager import SessionManager
 from web.service import SessionClosed, UnknownAction
+
+from export import FORMATS, ExportError, zip_files
 
 STATIC = Path(__file__).parent / "static"
 
@@ -94,6 +96,30 @@ def create_app(manager: SessionManager) -> FastAPI:
             raise HTTPException(409, str(exc))
         except (ValueError, TypeError) as exc:
             raise HTTPException(400, str(exc))
+
+    def exported(sid: str, fmt: str, include_unreviewed: bool, include_empty: bool):
+        if fmt not in FORMATS:
+            raise HTTPException(400, f"unknown export format '{fmt}' (use one of: {', '.join(FORMATS)})")
+        return service(sid).export(fmt, include_unreviewed, include_empty)
+
+    @app.get("/api/s/{sid}/export/preview")
+    def export_preview(sid: str, fmt: str = Query("lidar", alias="format"),
+                       include_unreviewed: bool = False, include_empty: bool = False):
+        try:
+            result = exported(sid, fmt, include_unreviewed, include_empty)
+        except ExportError as exc:
+            return {"available": False, "reason": str(exc), "summary": None}
+        return {"available": True, "reason": None, "summary": result.summary.to_dict()}
+
+    @app.get("/api/s/{sid}/export")
+    def export_download(sid: str, fmt: str = Query("lidar", alias="format"),
+                        include_unreviewed: bool = False, include_empty: bool = False):
+        try:
+            result = exported(sid, fmt, include_unreviewed, include_empty)
+        except ExportError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return Response(zip_files(result.files), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{result.archive_name}"'})
 
     @app.post("/api/s/{sid}/finish")
     def finish(sid: str):

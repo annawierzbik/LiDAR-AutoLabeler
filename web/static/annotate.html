@@ -92,6 +92,14 @@
   .item:hover { background:var(--raised); } .item.sel { border-color:var(--text); background:var(--raised); }
   .item .r { margin-left:auto; color:var(--muted); }
   details summary { cursor:pointer; font-weight:600; padding:2px 0; }
+  .exp { display:grid; gap:10px; margin-top:10px; }
+  .check { display:flex; align-items:flex-start; gap:8px; cursor:pointer; }
+  .check input { margin-top:3px; }
+  a.btn { background:var(--raised); border:1px solid var(--line); border-radius:5px; padding:8px 10px; text-align:center; color:var(--text);
+          text-decoration:none; font-weight:600; }
+  a.btn:hover { background:var(--raised-hover); border-color:var(--line-strong); }
+  a.btn:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
+  a.btn[aria-disabled=true] { opacity:.45; pointer-events:none; }
   .keys { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin-top:10px; font-size:12.5px; color:var(--muted); }
   .keys span:nth-child(odd) { color:var(--text); white-space:nowrap; }
 
@@ -179,6 +187,24 @@
         <label class="row small muted" style="gap:6px; cursor:pointer"><input type="checkbox" id="rej"> show rejected</label>
       </div>
       <div id="list"></div>
+    </section>
+
+    <section>
+      <details id="exp">
+        <summary>Export labels</summary>
+        <div class="exp">
+          <label class="row small muted" style="gap:8px">Format
+            <select id="expFmt" aria-label="Export format">
+              <option value="lidar">LiDAR frame (OpenPCDet layout)</option>
+              <option value="kitti">KITTI tracking labels</option>
+            </select>
+          </label>
+          <label class="check small muted"><input type="checkbox" id="expUnrev"> Include frames that still have boxes to review</label>
+          <label class="check small muted" id="expEmptyRow"><input type="checkbox" id="expEmpty"> Include frames without boxes</label>
+          <div id="expInfo" class="small" role="status">Open this section to see what would be exported.</div>
+          <a id="expGo" class="btn" href="#" download aria-disabled="true">Download .zip</a>
+        </div>
+      </details>
     </section>
 
     <section>
@@ -478,6 +504,7 @@ function applyState(s) {
   if (!s.annotations.length) list.append(el('div', 'muted small', 'Nothing here yet.'));
   $('empty').textContent = s.annotations.length ? '' : 'No boxes in this frame. Press B to add one.';
   drawBoxes();
+  scheduleExport();
   if (frameChanged) loadPoints(s.frame).catch(e => toast('Could not load points: ' + e.message));
 }
 
@@ -494,6 +521,36 @@ function setPlaying(on) {
   }, 250);
 }
 $('play').onclick = e => { setPlaying(!playing); if (e.detail > 0) e.currentTarget.blur(); };
+
+// --------------------------------------------------------------------- export
+let exportTimer = null;
+function exportQuery() {
+  return new URLSearchParams({ format: $('expFmt').value, include_unreviewed: $('expUnrev').checked, include_empty: $('expEmpty').checked });
+}
+function describeExport(r) {
+  const go = $('expGo'), info = $('expInfo');
+  go.href = `${API}/export?${exportQuery()}`;
+  if (!r.available) { info.textContent = r.reason; go.setAttribute('aria-disabled', 'true'); return; }
+  const s = r.summary;
+  const classes = Object.entries(s.per_class).map(([k, v]) => `${v} ${k}`).join(', ');
+  let text = s.frames ? `${s.frames} frames with ${s.boxes} boxes (${classes}).` : 'Nothing to export yet: no frame is fully reviewed.';
+  const left = [];
+  if (s.skipped_unreviewed) left.push(`${s.skipped_unreviewed} frames that still have boxes to review`);
+  if (s.skipped_empty) left.push(`${s.skipped_empty} frames without boxes`);
+  if (s.skipped_outside_view) left.push(`${s.skipped_outside_view} boxes outside the camera view`);
+  if (left.length) text += ' Left out: ' + left.join(', ') + '.';
+  info.textContent = text;
+  go.setAttribute('aria-disabled', s.frames ? 'false' : 'true');
+}
+async function refreshExport() {
+  if (!$('exp').open) return;
+  $('expEmptyRow').style.display = $('expFmt').value === 'lidar' ? '' : 'none';
+  try { describeExport(await (await api(`${API}/export/preview?${exportQuery()}`)).json()); }
+  catch (e) { $('expInfo').textContent = 'Could not check the export: ' + e.message; $('expGo').setAttribute('aria-disabled', 'true'); }
+}
+function scheduleExport() { if ($('exp').open) { clearTimeout(exportTimer); exportTimer = setTimeout(refreshExport, 400); } }
+$('exp').addEventListener('toggle', refreshExport);
+for (const id of ['expFmt', 'expUnrev', 'expEmpty']) $(id).addEventListener('change', refreshExport);
 
 $('home').onclick = () => { location.href = '/'; };
 $('finish').onclick = async () => {
