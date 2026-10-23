@@ -22,7 +22,7 @@ def sid(env):
 
 def test_pages_are_served(env):
     client = env[0]
-    assert "Annotate a point cloud sequence" in client.get("/").text
+    assert "Open a sequence" in client.get("/").text
     assert "annotate" in client.get("/annotate").text.lower()
 
 

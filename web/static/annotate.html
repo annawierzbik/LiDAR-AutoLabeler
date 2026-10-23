@@ -4,92 +4,204 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Annotate - LiDAR AutoLabeler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#14161a; --panel:#1d2026; --line:#2c313a; --text:#e6e8eb; --muted:#9aa3ad; --accent:#4da3ff; }
-  * { box-sizing: border-box; }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; }
-  #app { display:grid; grid-template-columns: 1fr 320px; height:100%; }
-  #view { position:relative; min-width:0; }
+  :root {
+    --bg:#0a0d10; --panel:#12161b; --raised:#1a2027; --raised-hover:#222a33; --line:#242d36; --line-strong:#3a4753;
+    --text:#dde4ea; --muted:#7f8c99;
+    --good:#2f7d3a; --good-bg:#12261a; --good-text:#c4f5ca; --bad:#9c3a3a; --bad-bg:#2a1517; --bad-text:#ffc9c9;
+    font-family:"Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font-size:13.5px; line-height:1.45; font-variant-numeric:tabular-nums; }
+  button, select, input { font:inherit; color:inherit; }
+
+  #app { display:grid; grid-template-columns:minmax(0, 1fr) 344px; height:100%; }
+  #stage { display:grid; grid-template-rows:minmax(0, 1fr) auto; min-width:0; min-height:0; }
+
+  /* ------------------------------------------------------------------ 3D view */
+  #view { position:relative; min-height:0; overflow:hidden; user-select:none; -webkit-user-select:none; }
   #view canvas { display:block; width:100%; height:100%; }
-  #hud { position:absolute; left:12px; top:10px; color:var(--muted); font-size:13px; pointer-events:none; text-shadow:0 1px 2px #000; }
-  #panel { background:var(--panel); border-left:1px solid var(--line); padding:12px; overflow:auto; display:flex; flex-direction:column; gap:12px; }
-  h1 { font-size:15px; margin:0; } h2 { font-size:12px; margin:0 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
-  .muted { color:var(--muted); font-size:12px; }
-  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:6px 0 2px; }
-  .bar > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
-  .row { display:flex; gap:6px; flex-wrap:wrap; }
-  button, select { background:#272c35; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
-  button:hover { border-color:var(--accent); } button:focus-visible, select:focus-visible { outline:2px solid var(--accent); }
-  input[type=range] { width:100%; }
-  #list { display:flex; flex-direction:column; gap:2px; max-height:240px; overflow:auto; }
-  .item { display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:6px; cursor:pointer; border:1px solid transparent; }
-  .item:hover { background:#272c35; } .item.sel { border-color:#fff; }
+  #hud { position:absolute; left:16px; top:14px; pointer-events:none; text-shadow:0 1px 3px #000; }
+  #hud .seq { font-size:15px; font-weight:600; }
+  #hud .sub { color:var(--muted); }
+  #hud #empty { margin-top:8px; color:var(--text); }
+  #tools { position:absolute; right:12px; top:12px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end;
+           background:rgba(10,13,16,.78); border:1px solid var(--line); border-radius:7px; padding:6px; }
+  #tools label { display:flex; align-items:center; gap:6px; color:var(--muted); padding:0 6px; cursor:pointer; }
+  #tools input[type=range] { width:84px; accent-color:var(--text); }
+  #labels { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .tag { position:absolute; left:0; top:0; padding:1px 6px; font-size:12px; font-weight:500; background:rgba(10,13,16,.82);
+         border-left:3px solid var(--c, #888); border-radius:3px; white-space:nowrap; will-change:transform; }
+  .tag.sel { background:#fff; color:#0a0d10; }
+  #toast { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); background:#000d; border:1px solid var(--line-strong);
+           padding:7px 14px; border-radius:6px; display:none; max-width:80%; }
+
+  /* ---------------------------------------------------------------- transport */
+  #transport { border-top:1px solid var(--line); background:var(--panel); padding:10px 14px 8px; display:grid; gap:8px; }
+  #transport .top { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #transport .spacer { flex:1; }
+  #strip-wrap { position:relative; }
+  #strip { display:block; width:100%; height:38px; border-radius:4px; background:#0e1216; cursor:pointer; touch-action:none; }
+  #tip { position:absolute; bottom:44px; transform:translateX(-50%); background:#000d; border:1px solid var(--line-strong); padding:2px 8px;
+         border-radius:4px; font-size:12px; white-space:nowrap; pointer-events:none; display:none; }
+  .key-legend { display:flex; gap:14px; color:var(--muted); font-size:12px; }
+  .key-legend span { display:inline-flex; align-items:center; gap:6px; }
+  .sw { width:10px; height:10px; border-radius:2px; flex:none; display:inline-block; }
+
+  /* -------------------------------------------------------------------- panel */
+  #panel { background:var(--panel); border-left:1px solid var(--line); overflow:auto; display:flex; flex-direction:column; min-height:0; }
+  #panel > section { padding:14px 16px; border-bottom:1px solid var(--line); }
+  #panel > section:last-child { border-bottom:0; }
+  h1 { font-size:16px; font-weight:700; margin:0; letter-spacing:.01em; }
+  h2 { font-size:13px; font-weight:600; margin:0 0 8px; }
+  .muted { color:var(--muted); }
+  .small { font-size:12px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  #save { margin-top:2px; font-size:12px; color:var(--muted); }
+  #save.err { color:var(--bad-text); }
+
+  button { background:var(--raised); border:1px solid var(--line); border-radius:5px; padding:6px 10px; cursor:pointer;
+           display:inline-flex; align-items:center; justify-content:center; gap:8px; }
+  button:hover { background:var(--raised-hover); border-color:var(--line-strong); }
+  button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
+  button.accept { background:var(--good-bg); border-color:var(--good); color:var(--good-text); padding:9px 10px; font-weight:600; }
+  button.reject { background:var(--bad-bg); border-color:var(--bad); color:var(--bad-text); padding:9px 10px; font-weight:600; }
+  button.accept:hover { background:#173322; } button.reject:hover { background:#361a1d; }
+  button.quiet { background:transparent; }
+  kbd { font:inherit; font-size:11px; color:var(--muted); background:#0e1216; border:1px solid var(--line); border-radius:3px; padding:0 5px; line-height:1.5; }
+  button.accept kbd, button.reject kbd { color:inherit; opacity:.75; }
+
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:8px 0 10px; }
+  .bar > div { height:100%; width:0; background:#46b85a; transition:width .2s; }
+  .counts { display:grid; grid-template-columns:1fr 1fr; gap:3px 14px; }
+  .counts div { display:flex; align-items:center; gap:7px; }
+  .counts b { margin-left:auto; font-weight:600; }
   .chip { width:10px; height:10px; border-radius:50%; flex:none; }
-  .legend { display:grid; grid-template-columns:1fr 1fr; gap:2px 8px; font-size:12px; }
-  kbd { background:#272c35; border:1px solid var(--line); border-radius:4px; padding:0 4px; font-size:11px; }
-  #keys { font-size:12px; color:var(--muted); display:grid; grid-template-columns:auto 1fr; gap:2px 8px; }
-  #saveError { position:absolute; left:12px; right:12px; top:36px; background:#5a1d1d; border:1px solid #ff7a7a; color:#ffe1e1; padding:8px 12px; border-radius:6px; font-weight:600; }
-  #toast { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); background:#000a; padding:6px 12px; border-radius:6px; display:none; }
-  @media (max-width: 800px) { #app { grid-template-columns: 1fr; grid-template-rows: 55% 45%; } }
+
+  .facts { display:grid; grid-template-columns:auto 1fr; gap:3px 14px; margin:10px 0 0; }
+  .facts dt { color:var(--muted); } .facts dd { margin:0; }
+  .status-pill { display:inline-flex; align-items:center; gap:6px; }
+
+  select { background:var(--raised); border:1px solid var(--line); border-radius:5px; padding:5px 8px; }
+  #list { display:flex; flex-direction:column; gap:1px; max-height:230px; overflow:auto; margin:0 -6px; }
+  .item { display:flex; align-items:center; gap:8px; padding:5px 6px; border-radius:5px; cursor:pointer; border:1px solid transparent; }
+  .item:hover { background:var(--raised); } .item.sel { border-color:var(--text); background:var(--raised); }
+  .item .r { margin-left:auto; color:var(--muted); }
+  details summary { cursor:pointer; font-weight:600; padding:2px 0; }
+  .keys { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin-top:10px; font-size:12.5px; color:var(--muted); }
+  .keys span:nth-child(odd) { color:var(--text); white-space:nowrap; }
+
+  @media (max-width:900px) { #app { grid-template-columns:1fr; grid-template-rows:minmax(0, 62%) minmax(0, 38%); } #panel { border-left:0; border-top:1px solid var(--line); } }
+  @media (prefers-reduced-motion:reduce) { * { transition:none !important; } }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="view"><div id="hud"></div><div id="saveError" role="alert" hidden></div><div id="toast"></div></div>
+  <div id="stage">
+    <div id="view">
+      <div id="hud"><div class="seq" id="seq"></div><div class="sub" id="sub"></div><div id="empty"></div></div>
+      <div id="tools" role="toolbar" aria-label="View">
+        <button id="v-top" title="Look straight down (V)">Top view</button>
+        <button id="v-focus" title="Centre on the selected box (F)">Focus box</button>
+        <button id="v-reset" title="Back to the default view (0)">Reset view</button>
+        <label>Points <input type="range" id="psize" min="0.02" max="0.2" step="0.01" aria-label="Point size"></label>
+        <label><input type="checkbox" id="lbl"> Labels</label>
+      </div>
+      <div id="labels"></div>
+      <div id="toast" role="status"></div>
+    </div>
+    <div id="transport">
+      <div class="top">
+        <button data-a="prev" title="Left arrow">Previous <kbd>&larr;</kbd></button>
+        <button id="play" title="Space">Play <kbd>Space</kbd></button>
+        <button data-a="next" title="Right arrow">Next <kbd>&rarr;</kbd></button>
+        <button data-a="next_pending" title="N">Next to review <kbd>N</kbd></button>
+        <span class="spacer"></span>
+        <div class="key-legend" aria-hidden="true">
+          <span><i class="sw" style="background:#ffa600"></i>to review</span>
+          <span><i class="sw" style="background:#46b85a"></i>reviewed</span>
+          <span><i class="sw" style="background:#1d252d"></i>no boxes</span>
+        </div>
+      </div>
+      <div id="strip-wrap">
+        <canvas id="strip" role="slider" aria-label="Frame" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0"></canvas>
+        <div id="tip"></div>
+      </div>
+    </div>
+  </div>
+
   <aside id="panel">
-    <div><h1>LiDAR AutoLabeler</h1><div class="muted" id="meta"></div>
-      <div class="row" style="margin-top:8px"><button id="home" title="Leave without finishing; progress is saved">&larr; Start screen</button><button id="finish" title="Save and close this session">Finish</button></div></div>
-    <div>
-      <h2>Progress</h2>
-      <div id="progress" class="muted"></div>
+    <section>
+      <div class="row" style="justify-content:space-between; align-items:flex-start">
+        <div><h1>LiDAR AutoLabeler</h1><div id="save">Changes are saved automatically.</div></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="home" class="quiet" title="Leave without finishing; progress is saved">Start screen</button>
+        <button id="finish" title="Save and close this session">Finish</button>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="progress">Review</h2>
       <div class="bar"><div id="bar"></div></div>
-      <input id="slider" type="range" min="0" max="0" value="0" aria-label="Frame">
-      <div class="row" style="margin-top:6px">
-        <button data-a="prev" title="Left arrow">&larr;</button>
-        <button id="play" title="Space">Play</button>
-        <button data-a="next" title="Right arrow">&rarr;</button>
-        <button data-a="next_pending" title="N">Next pending</button>
-      </div>
-    </div>
-    <div>
+      <div class="counts small" id="counts"></div>
+    </section>
+
+    <section>
       <h2>Decision</h2>
-      <div class="row">
-        <button data-a="accept" title="A / Enter">Accept</button>
-        <button data-a="reject" title="R / Delete">Reject</button>
-        <button data-a="accept_track" title="T">Accept track</button>
-        <button data-a="reject_track" title="X">Reject track</button>
+      <div class="grid2">
+        <button class="accept" data-a="accept" title="A or Enter">Accept <kbd>A</kbd></button>
+        <button class="reject" data-a="reject" title="R or Delete">Reject <kbd>R</kbd></button>
+        <button data-a="accept_track" title="T">Accept track <kbd>T</kbd></button>
+        <button data-a="reject_track" title="X">Reject track <kbd>X</kbd></button>
+        <button data-a="undo" title="Z">Undo <kbd>Z</kbd></button>
+        <button data-a="redo" title="Y">Redo <kbd>Y</kbd></button>
+        <button data-a="add" title="B">Add box <kbd>B</kbd></button>
+        <button data-a="copy_next" title="C">Copy to next <kbd>C</kbd></button>
       </div>
-      <div class="row" style="margin-top:6px">
-        <button data-a="undo" title="Z">Undo</button>
-        <button data-a="redo" title="Y">Redo</button>
-        <button data-a="add" title="B">Add box</button>
-        <button data-a="copy_next" title="C">Copy to next</button>
+    </section>
+
+    <section>
+      <div class="row" style="justify-content:space-between; margin-bottom:8px">
+        <h2 style="margin:0">Selected box</h2>
+        <label class="row small muted" style="gap:6px">Class <select id="cls" aria-label="Class of the selected box and of new boxes"></select></label>
       </div>
-      <div class="row" style="margin-top:6px; align-items:center">
-        <label class="muted" for="cls">Class</label><select id="cls"></select>
-        <label class="muted"><input type="checkbox" id="rej"> show rejected</label>
+      <div id="inspect" class="muted"></div>
+    </section>
+
+    <section>
+      <div class="row" style="justify-content:space-between; margin-bottom:6px">
+        <h2 style="margin:0" id="listTitle">Boxes in this frame</h2>
+        <label class="row small muted" style="gap:6px; cursor:pointer"><input type="checkbox" id="rej"> show rejected</label>
       </div>
-    </div>
-    <div><h2>Objects in this frame</h2><div id="list"></div></div>
-    <div><h2>Status colours</h2><div class="legend" id="legend"></div></div>
-    <div>
-      <h2>Keys</h2>
-      <div id="keys">
-        <span><kbd>&larr;</kbd> <kbd>&rarr;</kbd></span><span>previous / next frame</span>
-        <span><kbd>Space</kbd></span><span>play / pause</span>
-        <span><kbd>N</kbd></span><span>next frame with pending boxes</span>
-        <span><kbd>Tab</kbd> <kbd>[</kbd> <kbd>]</kbd></span><span>select next / previous box</span>
-        <span><kbd>A</kbd> <kbd>R</kbd></span><span>accept / reject box</span>
-        <span><kbd>T</kbd> <kbd>X</kbd></span><span>accept / reject whole track</span>
-        <span><kbd>I</kbd><kbd>K</kbd><kbd>J</kbd><kbd>L</kbd></span><span>move 10 cm (fwd, back, left, right)</span>
-        <span><kbd>PgUp</kbd> <kbd>PgDn</kbd></span><span>up / down 5 cm</span>
-        <span><kbd>,</kbd> <kbd>.</kbd></span><span>rotate 2&deg;</span>
-        <span><kbd>1</kbd>-<kbd>6</kbd></span><span>length &minus;/+, width &minus;/+, height &minus;/+</span>
-        <span><kbd>B</kbd> <kbd>C</kbd></span><span>add box / copy to next frame</span>
-        <span><kbd>Z</kbd> <kbd>Y</kbd></span><span>undo / redo</span>
-        <span>mouse</span><span>drag = rotate view, right-drag = pan, wheel = zoom, click a box = select</span>
-      </div>
-    </div>
+      <div id="list"></div>
+    </section>
+
+    <section>
+      <details>
+        <summary>Keyboard and mouse</summary>
+        <div class="keys">
+          <span>&larr; &rarr;</span><span>previous or next frame</span>
+          <span>Space</span><span>play or pause</span>
+          <span>N</span><span>next frame with boxes to review</span>
+          <span>Tab, [ ]</span><span>select next or previous box</span>
+          <span>A, R</span><span>accept or reject the selected box</span>
+          <span>T, X</span><span>accept or reject the whole track</span>
+          <span>I K J L</span><span>move 10 cm forward, back, left, right</span>
+          <span>PgUp PgDn</span><span>move up or down 5 cm</span>
+          <span>, .</span><span>rotate by 2 degrees</span>
+          <span>1 to 6</span><span>length, width, height smaller or larger</span>
+          <span>B, C</span><span>add a box, copy it to the next frame</span>
+          <span>Z, Y</span><span>undo, redo</span>
+          <span>V, F, 0</span><span>top view, focus on the box, reset view</span>
+          <span>Mouse</span><span>drag turns the view, Shift + drag or right drag pans, wheel zooms, click selects a box</span>
+        </div>
+      </details>
+    </section>
   </aside>
 </div>
 
@@ -102,8 +214,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const COLORS = { pending:0xffa600, accepted:0x40ff40, rejected:0x8c2626, edited:0x33e6ff, manual:0xff4dff, interpolated:0xbf8cff };
+const COLORS = { pending:0xffa600, accepted:0x40ff40, edited:0x33e6ff, manual:0xff4dff, interpolated:0xbf8cff, rejected:0x8c2626 };
 const SELECTED = 0xffffff;
+const MARK_COLORS = ['#1d252d', '#ffa600', '#46b85a'];   // frame_marks: 0 no boxes, 1 to review, 2 reviewed
+const hex = n => '#' + n.toString(16).padStart(6, '0');
 const KEYS = {
   ArrowRight:'next', ArrowLeft:'prev', n:'next_pending', Tab:'select_next', ']':'select_next', '[':'select_prev',
   a:'accept', Enter:'accept', r:'reject', Delete:'reject', Backspace:'reject', t:'accept_track', x:'reject_track',
@@ -111,39 +225,63 @@ const KEYS = {
   '1':'length_minus', '2':'length_plus', '3':'width_minus', '4':'width_plus', '5':'height_minus', '6':'height_plus',
   b:'add', c:'copy_next', z:'undo', y:'redo'
 };
+const REPEATABLE = ['forward','back','left','right','up','down','rotate_left','rotate_right','next','prev'];
 
 const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+
+// ------------------------------------------------------------------- 3D scene
 const view = $('view');
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-view.appendChild(renderer.domElement);
+view.insertBefore(renderer.domElement, view.firstChild);
+// The browser's context menu (with entries such as "back" or "open in new tab") must not appear over the view.
+addEventListener('contextmenu', e => { if (!e.target.closest('input, select, textarea')) e.preventDefault(); }, true);
+view.addEventListener('auxclick', e => e.preventDefault());
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0c0e);
+scene.background = new THREE.Color(0x0a0d10);
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);               // LiDAR frame: x forward, y left, z up
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
 camera.up.set(0, 0, 1);
-camera.position.set(-14, 0, 22);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(14, 0, 0);
-controls.update();
-const grid = new THREE.GridHelper(80, 16, 0x2a2f38, 0x1c2027);
+const DEFAULT_VIEW = { pos:[-14, 0, 22], target:[14, 0, 0] };
+function setView(pos, target) { camera.position.set(...pos); controls.target.set(...target); controls.update(); }
+setView(DEFAULT_VIEW.pos, DEFAULT_VIEW.target);
+const grid = new THREE.GridHelper(80, 16, 0x26303a, 0x171d24);
 grid.rotateX(Math.PI / 2); grid.position.set(20, 0, -1.73);   // road level in KITTI
 scene.add(grid);
 
 let state = null, cloud = null, boxGroup = new THREE.Group(), pickables = [];
 scene.add(boxGroup);
-let pointsToken = 0, playing = false, timer = null;
+let pointsToken = 0, playing = false, timer = null, pointSize = +store.get('pointSize', '0.06'), labelsOn = store.get('labels', '1') === '1';
+let tags = [];
 
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h, false); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
 }
-addEventListener('resize', resize); resize();
-(function loop() { requestAnimationFrame(loop); renderer.render(scene, camera); })();
+new ResizeObserver(resize).observe(view); resize();
+
+const proj = new THREE.Vector3();
+function placeTags() {
+  if (!labelsOn) return;
+  const w = view.clientWidth, h = view.clientHeight;
+  for (const t of tags) {
+    proj.copy(t.pos).project(camera);
+    const visible = proj.z > -1 && proj.z < 1 && Math.abs(proj.x) < 1.05 && Math.abs(proj.y) < 1.05;
+    t.el.style.display = visible ? '' : 'none';
+    if (visible) t.el.style.transform = `translate(${(proj.x + 1) / 2 * w}px, ${(1 - proj.y) / 2 * h}px) translate(-50%, -125%)`;
+  }
+}
+(function loop() { requestAnimationFrame(loop); renderer.render(scene, camera); placeTags(); })();
 
 function toast(msg) {
   const t = $('toast'); t.textContent = msg; t.style.display = 'block';
-  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 1500);
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 2200);
 }
 
 const SID = new URLSearchParams(location.search).get('sid');
@@ -173,8 +311,8 @@ async function loadPoints(frame) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); }
-  cloud = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.06, vertexColors: true, sizeAttenuation: true }));
+  if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); cloud.material.dispose(); }
+  cloud = new THREE.Points(g, new THREE.PointsMaterial({ size: pointSize, vertexColors: true, sizeAttenuation: true }));
   cloud.frustumCulled = false;
   scene.add(cloud);
   if (state && state.frame + 1 < state.num_frames) fetch(API + '/points/' + (state.frame + 1)).catch(() => {});  // warm the cache
@@ -188,7 +326,7 @@ const frontCross = new THREE.BufferGeometry().setAttribute('position', new THREE
 
 function drawBoxes() {
   for (const ch of [...boxGroup.children]) { boxGroup.remove(ch); ch.traverse(o => o.material && o.material.dispose && o.material.dispose()); }
-  pickables = [];
+  pickables = []; tags = []; $('labels').replaceChildren();
   for (const a of state.annotations) {
     const sel = a.i === state.selected;
     const color = sel ? SELECTED : COLORS[a.status];
@@ -199,14 +337,20 @@ function drawBoxes() {
     const fill = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color, transparent:true, opacity: sel ? 0.28 : 0.08, depthWrite:false }));
     fill.userData.index = a.i; g.add(fill); pickables.push(fill);
     boxGroup.add(g);
+
+    const tag = el('div', 'tag' + (sel ? ' sel' : ''), `${a.track_id != null ? '#' + a.track_id + ' ' : ''}${a.label}`);
+    tag.style.setProperty('--c', hex(COLORS[a.status]));
+    tag.style.display = labelsOn ? '' : 'none';
+    $('labels').appendChild(tag);
+    tags.push({ el: tag, pos: new THREE.Vector3(a.x, a.y, a.z + a.dz / 2) });
   }
 }
 
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
 let down = null;
-renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerdown', e => { down = e.button === 0 ? [e.clientX, e.clientY] : null; });   // left button only: right = pan
 renderer.domElement.addEventListener('pointerup', e => {
-  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;   // it was a drag, not a click
+  if (e.button !== 0 || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;   // a drag or another button, not a click
   const r = renderer.domElement.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
@@ -214,52 +358,142 @@ renderer.domElement.addEventListener('pointerup', e => {
   act('select', { index: hit ? hit.object.userData.index : null });
 });
 
+// ----------------------------------------------------------------- view tools
+function topView() { const t = controls.target; setView([t.x - 0.5, t.y, 55], [t.x, t.y, 0]); }
+function focusSelected() {
+  const a = state && state.annotations.find(x => x.i === state.selected);
+  if (!a) return toast('Select a box first (click it or press Tab).');
+  const off = camera.position.clone().sub(controls.target).setLength(18);
+  controls.target.set(a.x, a.y, a.z); camera.position.copy(controls.target).add(off); controls.update();
+}
+$('v-top').onclick = topView;
+$('v-focus').onclick = focusSelected;
+$('v-reset').onclick = () => setView(DEFAULT_VIEW.pos, DEFAULT_VIEW.target);
+$('psize').value = pointSize;
+$('psize').oninput = e => { pointSize = +e.target.value; store.set('pointSize', pointSize); if (cloud) cloud.material.size = pointSize; };
+$('lbl').checked = labelsOn;
+$('lbl').onchange = e => {
+  labelsOn = e.target.checked; store.set('labels', labelsOn ? '1' : '0');
+  for (const t of tags) t.el.style.display = labelsOn ? '' : 'none';
+};
+
+// ---------------------------------------------------------------- frame strip
+const strip = $('strip'), sctx = strip.getContext('2d'), tip = $('tip');
+function drawStrip() {
+  const dpr = devicePixelRatio || 1, W = strip.clientWidth, H = strip.clientHeight;
+  if (strip.width !== Math.round(W * dpr) || strip.height !== Math.round(H * dpr)) { strip.width = Math.round(W * dpr); strip.height = Math.round(H * dpr); }
+  sctx.setTransform(dpr, 0, 0, dpr, 0, 0); sctx.clearRect(0, 0, W, H);
+  if (!state) return;
+  const n = state.num_frames, marks = state.frame_marks || [], cw = W / n, gap = cw >= 4 ? 1 : 0;
+  for (let i = 0; i < n; i++) {
+    sctx.fillStyle = MARK_COLORS[marks[i] || 0];
+    const x0 = Math.floor(i * cw), x1 = Math.floor((i + 1) * cw);
+    sctx.fillRect(x0, 9, Math.max(1, x1 - x0 - gap), H - 9);
+  }
+  const x = Math.min(W - 1, Math.max(1, Math.floor((state.frame + 0.5) * cw)));
+  sctx.fillStyle = '#fff'; sctx.fillRect(x - 1, 0, 2, H);
+  sctx.beginPath(); sctx.moveTo(x - 5, 0); sctx.lineTo(x + 5, 0); sctx.lineTo(x, 7); sctx.closePath(); sctx.fill();
+}
+new ResizeObserver(drawStrip).observe(strip);
+const frameAt = ev => {
+  const r = strip.getBoundingClientRect();
+  return Math.max(0, Math.min(state.num_frames - 1, Math.floor((ev.clientX - r.left) / r.width * state.num_frames)));
+};
+let scrubTarget = null, scrubbing = false, dragging = false;
+async function scrubTo(f) {
+  scrubTarget = f;
+  if (scrubbing) return;                               // the running loop will pick up the newest target
+  scrubbing = true;
+  while (scrubTarget !== null) { const t = scrubTarget; scrubTarget = null; if (t !== state.frame) await act('goto', { frame: t }); }
+  scrubbing = false;
+}
+strip.addEventListener('pointerdown', e => { if (!state || e.button !== 0) return; dragging = true; strip.setPointerCapture(e.pointerId); scrubTo(frameAt(e)); });
+strip.addEventListener('pointermove', e => {
+  if (!state) return;
+  const f = frameAt(e), m = (state.frame_marks || [])[f];
+  tip.textContent = `Frame ${f + 1}` + (m === 1 ? ', to review' : m === 2 ? ', reviewed' : m === 0 ? ', no boxes' : '');
+  const r = strip.getBoundingClientRect();
+  tip.style.left = Math.min(r.width - 40, Math.max(40, e.clientX - r.left)) + 'px'; tip.style.display = 'block';
+  if (dragging) scrubTo(f);
+});
+strip.addEventListener('pointerup', () => { dragging = false; });
+strip.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
+
 // ---------------------------------------------------------------------- panel
+const STATUS_ORDER = ['pending', 'interpolated', 'accepted', 'edited', 'manual', 'rejected'];
 function applyState(s) {
   const frameChanged = !state || s.frame !== state.frame;
   state = s;
-  $('meta').textContent = `sequence ${s.sequence} · ${s.mode} mode`;
   const st = s.stats;
-  $('progress').textContent = `frame ${s.frame + 1}/${s.num_frames} · reviewed ${st.reviewed}/${st.total} (${Math.round(st.reviewed_fraction * 100)}%)`;
+  $('seq').textContent = s.sequence;
+  $('sub').textContent = `Frame ${s.frame + 1} of ${s.num_frames}, ${s.mode} mode`;
+  $('progress').textContent = `Reviewed ${st.reviewed} of ${st.total} boxes (${Math.round(st.reviewed_fraction * 100)}%)`;
   $('bar').style.width = (st.reviewed_fraction * 100) + '%';
-  const sl = $('slider'); sl.max = s.num_frames - 1; sl.value = s.frame;
+  strip.setAttribute('aria-valuenow', s.frame); strip.setAttribute('aria-valuemax', s.num_frames - 1);
+  strip.setAttribute('aria-valuetext', `Frame ${s.frame + 1} of ${s.num_frames}`);
+  drawStrip();
+
+  const sv = $('save');
+  sv.textContent = s.save_error ? 'Could not save: ' + s.save_error : 'Changes are saved automatically.';
+  sv.className = s.save_error ? 'err' : '';
+
+  const counts = $('counts'); counts.replaceChildren();
+  for (const k of STATUS_ORDER) {
+    const d = el('div'); const chip = el('i', 'chip'); chip.style.background = hex(COLORS[k]);
+    d.append(chip, el('span', null, k), el('b', null, String(st[k] ?? 0))); counts.appendChild(d);
+  }
+
   const cls = $('cls');
   if (!cls.options.length) for (const c of s.classes) cls.add(new Option(c, c));
   cls.value = s.current_class; $('rej').checked = s.show_rejected;
+
+  const sel = s.annotations.find(a => a.i === s.selected);
+  const box = $('inspect'); box.replaceChildren();
+  if (!sel) {
+    box.textContent = 'Click a box in the view or press Tab to select one.';
+  } else {
+    const pill = el('span', 'status-pill'); const chip = el('i', 'chip'); chip.style.background = hex(COLORS[sel.status]);
+    pill.append(chip, el('span', null, sel.status));
+    const f = el('dl', 'facts');
+    const row = (k, v) => { f.append(el('dt', null, k)); const dd = el('dd'); if (v instanceof Node) dd.append(v); else dd.textContent = v; f.append(dd); };
+    row('Status', pill);
+    row('Track', sel.track_id != null ? '#' + sel.track_id : 'none');
+    row('Confidence', sel.score != null ? sel.score.toFixed(2) : 'none');
+    row('Size', `${sel.dx.toFixed(2)} × ${sel.dy.toFixed(2)} × ${sel.dz.toFixed(2)} m`);
+    row('Position', `${sel.x.toFixed(1)}, ${sel.y.toFixed(1)}, ${sel.z.toFixed(1)} m`);
+    row('Heading', `${(sel.heading * 180 / Math.PI).toFixed(0)}°`);
+    box.append(f);
+  }
+
+  $('listTitle').textContent = `Boxes in this frame (${s.annotations.length})`;
   const list = $('list'); list.replaceChildren();
   for (const a of s.annotations) {
-    const d = document.createElement('div');
-    d.className = 'item' + (a.i === s.selected ? ' sel' : '');
-    d.innerHTML = `<span class="chip" style="background:#${COLORS[a.status].toString(16).padStart(6, '0')}"></span>` +
-      `<span>${a.track_id != null ? '#' + a.track_id : '·'} ${a.label}</span>` +
-      `<span class="muted" style="margin-left:auto">${a.status}${a.status === 'pending' ? ' ' + a.score.toFixed(2) : ''}</span>`;
+    const d = el('div', 'item' + (a.i === s.selected ? ' sel' : ''));
+    const chip = el('i', 'chip'); chip.style.background = hex(COLORS[a.status]);
+    d.append(chip, el('span', null, `${a.track_id != null ? '#' + a.track_id : '-'} ${a.label}`),
+      el('span', 'r', a.status === 'pending' && a.score != null ? 'pending ' + a.score.toFixed(2) : a.status));
     d.onclick = () => act('select', { index: a.i });
     list.appendChild(d);
   }
-  $('hud').textContent = s.annotations.length ? '' : 'No boxes in this frame (press B to add one)';
-  const se = $('saveError');                           // autosave failed: your latest changes are NOT on disk
-  se.hidden = !s.save_error;
-  se.textContent = s.save_error ? 'Not saved! ' + s.save_error : '';
+  if (!s.annotations.length) list.append(el('div', 'muted small', 'Nothing here yet.'));
+  $('empty').textContent = s.annotations.length ? '' : 'No boxes in this frame. Press B to add one.';
   drawBoxes();
   if (frameChanged) loadPoints(s.frame).catch(e => toast('Could not load points: ' + e.message));
 }
 
-for (const b of document.querySelectorAll('button[data-a]')) b.onclick = () => act(b.dataset.a);
-$('slider').oninput = e => act('goto', { frame: +e.target.value });
+for (const b of document.querySelectorAll('button[data-a]')) b.onclick = e => { act(b.dataset.a); if (e.detail > 0) b.blur(); };
 $('cls').onchange = e => act('set_class', { label: e.target.value });
 $('rej').onchange = () => act('toggle_rejected');
-$('legend').innerHTML = Object.entries(COLORS).map(([k, v]) =>
-  `<span><span class="chip" style="display:inline-block;background:#${v.toString(16).padStart(6, '0')}"></span> ${k}</span>`).join('');
 
 function setPlaying(on) {
-  playing = on; $('play').textContent = on ? 'Pause' : 'Play';
+  playing = on; $('play').firstChild.textContent = on ? 'Pause ' : 'Play ';
   clearInterval(timer);
   if (on) timer = setInterval(async () => {
     if (state.frame + 1 >= state.num_frames) return setPlaying(false);
     await act('play_step');
   }, 250);
 }
-$('play').onclick = () => setPlaying(!playing);
+$('play').onclick = e => { setPlaying(!playing); if (e.detail > 0) e.currentTarget.blur(); };
 
 $('home').onclick = () => { location.href = '/'; };
 $('finish').onclick = async () => {
@@ -267,14 +501,16 @@ $('finish').onclick = async () => {
   try { await api(API + '/finish', {}); location.href = '/'; } catch (e) { toast('Error: ' + e.message); }
 };
 
+const CLIENT_KEYS = { f: focusSelected, v: topView, '0': () => setView(DEFAULT_VIEW.pos, DEFAULT_VIEW.target) };
 addEventListener('keydown', e => {
   if (e.target.matches('select, input[type=text]') || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === ' ') { e.preventDefault(); setPlaying(!playing); return; }
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (CLIENT_KEYS[key]) { e.preventDefault(); CLIENT_KEYS[key](); return; }
   const name = KEYS[key];
   if (!name) return;
   e.preventDefault();
-  if (!e.repeat || ['forward','back','left','right','up','down','rotate_left','rotate_right','next','prev'].includes(name)) act(name);
+  if (!e.repeat || REPEATABLE.includes(name)) act(name);
 });
 
 api(API + '/state').then(r => r.json()).then(applyState).catch(e => toast('Cannot reach the server: ' + e.message));

@@ -99,6 +99,7 @@ class ReviewService:
                 "classes": list(CLASSES),
                 "show_rejected": c.show_rejected,
                 "stats": st,
+                "frame_marks": self._frame_marks(),
                 "save_error": self.save_error,
                 "annotations": [
                     {"i": i, "x": a.box.x, "y": a.box.y, "z": a.box.z, "dx": a.box.dx, "dy": a.box.dy,
@@ -107,6 +108,11 @@ class ReviewService:
                     for i, a in c.visible()
                 ],
             }
+    
+    def _frame_marks(self) -> list[int]:
+        """One value per frame for the timeline: 0 = no boxes, 1 = boxes still to review, 2 = all reviewed."""
+        s = self.session
+        return [1 if s.frame_has_pending(f) else (2 if s.annotations(f) else 0) for f in range(s.num_frames)]
 
     def points(self, frame: int) -> bytes:
         """Raw little-endian float32 (N, 3) x y z of one session frame."""
@@ -165,3 +171,5 @@ class ReviewService:
         with self._lock:
             self.save()
             self.closed = True
+
+

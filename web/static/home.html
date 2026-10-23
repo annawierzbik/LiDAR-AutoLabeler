@@ -4,46 +4,81 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LiDAR AutoLabeler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#14161a; --panel:#1d2026; --line:#2c313a; --text:#e6e8eb; --muted:#9aa3ad; --accent:#4da3ff; --bad:#ff7a7a; }
-  * { box-sizing: border-box; }
-  html, body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; }
-  main { max-width:720px; margin:0 auto; padding:48px 16px; }
-  h1 { font-size:28px; margin:0 0 4px; } .lead { color:var(--muted); margin:0 0 32px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
-  .card h2 { font-size:17px; margin:0 0 4px; } .card p { color:var(--muted); margin:0 0 14px; font-size:14px; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  input[type=text] { flex:1; min-width:200px; background:#111317; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font:inherit; }
-  button { background:var(--accent); color:#06121f; border:0; border-radius:8px; padding:9px 16px; font:inherit; font-weight:600; cursor:pointer; }
-  button.secondary { background:#272c35; color:var(--text); border:1px solid var(--line); font-weight:500; }
-  button:disabled { opacity:.45; cursor:default; }
-  input:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  .msg { margin-top:12px; font-size:14px; white-space:pre-wrap; } .msg.err { color:var(--bad); } .msg.info { color:var(--muted); }
-  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 1s linear infinite; vertical-align:-1px; margin-right:6px; }
+  :root {
+    --bg:#0a0d10; --panel:#12161b; --raised:#1a2027; --raised-hover:#222a33; --line:#242d36; --line-strong:#3a4753;
+    --text:#dde4ea; --muted:#7f8c99; --bad-text:#ffb3b3; --amber:#ffa600;
+    font-family:"Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-size:18px; line-height:1.5; }
+  button, input { font:inherit; color:inherit; }
+
+  main { max-width:1200px; min-height:100vh; margin:0 auto; padding:56px 32px; display:grid; grid-template-columns:minmax(0, 620px) 1fr; gap:56px; align-items:center; }
+  h1 { font-size:52px; line-height:1.1; font-weight:700; margin:0 0 16px; letter-spacing:-.015em; }
+  .lead { color:var(--muted); font-size:21px; line-height:1.45; margin:0 0 44px; max-width:34ch; }
+  h2 { font-size:21px; font-weight:600; margin:0 0 6px; }
+  .hint { color:var(--muted); font-size:17px; margin:0 0 16px; max-width:52ch; }
+
+  .row { display:flex; gap:10px; }
+  input[type=text] { flex:1; min-width:0; background:#0e1216; border:1px solid var(--line); border-radius:8px; padding:14px 16px; font-size:18px; }
+  input[type=text]::placeholder { color:#566370; }
+  button { border:1px solid var(--line); background:var(--raised); border-radius:8px; padding:14px 26px; cursor:pointer; font-size:18px; }
+  button:hover { background:var(--raised-hover); border-color:var(--line-strong); }
+  button.primary { background:var(--text); color:#0a0d10; border-color:var(--text); font-weight:600; }
+  button.primary:hover { background:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  input:focus-visible, button:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
+
+  .msg { margin-top:16px; min-height:1.5em; white-space:pre-wrap; color:var(--muted); font-size:17px; }
+  .msg.err { color:var(--bad-text); }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--line-strong); border-top-color:var(--text); border-radius:50%; animation:s 1s linear infinite; vertical-align:-1px; margin-right:8px; }
   @keyframes s { to { transform:rotate(360deg); } }
+
+  #recent { margin-top:36px; border-top:1px solid var(--line); padding-top:20px; }
+  #recent ul { list-style:none; margin:10px 0 0; padding:0; }
+  #recent li button { width:100%; text-align:left; background:transparent; border:0; border-radius:6px; padding:9px 10px; margin:0 -10px; color:var(--text); font-size:17px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #recent li button:hover { background:var(--raised); }
+
+  #scan { width:100%; height:auto; max-height:440px; }
+  @media (max-width:980px) { main { grid-template-columns:1fr; padding-top:40px; } #scan { display:none; } h1 { font-size:42px; } }
+  @media (prefers-reduced-motion:reduce) { .spin { animation:none; } }
 </style>
 </head>
 <body>
 <main>
-  <h1>LiDAR AutoLabeler</h1>
-  <p class="lead">Semi-automatic 3D annotation of LiDAR point clouds: the system proposes boxes, you verify them.</p>
+  <div>
+    <h1>LiDAR AutoLabeler</h1>
+    <p class="lead">The system proposes 3D boxes for a LiDAR sequence. You check each one, fix what is wrong and accept the rest.</p>
 
-  <section class="card" id="home">
-    <h2>Annotate a point cloud sequence</h2>
-    <p>Folder with <code>.bin</code> frames (x, y, z, intensity), on the computer that runs this server.</p>
+    <h2>Open a sequence</h2>
+    <p class="hint">Choose a folder with <code>.bin</code> frames (x, y, z and intensity per point). The folder has to be on the computer that runs this server.</p>
     <div class="row">
-      <input type="text" id="path" placeholder="D:\clouds\drive1  or  /data/clouds/drive1" aria-label="Folder path" autocomplete="off">
-      <button id="open">Open</button>
+      <input type="text" id="path" placeholder="D:\clouds\drive1  or  /data/clouds/drive1" aria-label="Folder path" autocomplete="off" spellcheck="false">
+      <button id="open" class="primary">Open</button>
     </div>
     <div class="msg" id="openMsg" role="status"></div>
-  </section>
 
+    <div id="recent" hidden>
+      <h2>Recent folders</h2>
+      <ul id="recentList"></ul>
+    </div>
+  </div>
+
+  <svg id="scan" viewBox="-200 -200 400 400" role="img" aria-label="Rings of LiDAR points around a vehicle with one proposed box"></svg>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
-const say = (el, text, kind = 'info') => { el.className = 'msg ' + kind; el.textContent = text; };
-const spin = (el, text) => { el.className = 'msg info'; el.innerHTML = '<span class="spin"></span>'; el.append(text); };
+const say = (el, text, kind = 'info') => { el.className = 'msg ' + (kind === 'err' ? 'err' : ''); el.textContent = text; };
+const spin = (el, text) => { el.className = 'msg'; el.replaceChildren(); const s = document.createElement('span'); s.className = 'spin'; el.append(s, text); };
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
 
 async function call(path, body) {
   const r = await fetch(path, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -52,8 +87,8 @@ async function call(path, body) {
 }
 
 // wait until a session job is ready, then open the annotation page
-async function openWhenReady(sid, msgEl, title) {
-  spin(msgEl, ` Loading ${title || ''}... if detection has to run first this can take a few minutes.`);
+async function openWhenReady(sid, msgEl) {
+  spin(msgEl, 'Loading the sequence. If detection has to run first, this can take a few minutes.');
   for (;;) {
     const j = await call('/api/jobs/' + sid);
     if (j.status === 'ready') { location.href = '/annotate?sid=' + sid; return; }
@@ -62,20 +97,60 @@ async function openWhenReady(sid, msgEl, title) {
   }
 }
 
+// ------------------------------------------------------------------- recent folders
+const recent = () => { try { return JSON.parse(store.get('recentFolders', '[]')); } catch (e) { return []; } };
+function remember(path) {
+  const list = [path, ...recent().filter(p => p !== path)].slice(0, 5);
+  store.set('recentFolders', JSON.stringify(list)); store.set('lastFolder', path);
+}
+function showRecent() {
+  const list = recent(); $('recent').hidden = !list.length;
+  const ul = $('recentList'); ul.replaceChildren();
+  for (const p of list) {
+    const li = document.createElement('li'), b = document.createElement('button');
+    b.textContent = p; b.title = 'Open ' + p; b.onclick = () => { $('path').value = p; openFolder(); };
+    li.appendChild(b); ul.appendChild(li);
+  }
+}
+
 // ------------------------------------------------------------------- folder
-try { $('path').value = localStorage.getItem('lastFolder') || ''; } catch (e) {}
-$('open').onclick = async () => {
+async function openFolder() {
   const path = $('path').value.trim();
-  if (!path) return say($('openMsg'), 'Enter the path of a folder.', 'err');
+  if (!path) return say($('openMsg'), 'Enter the path of a folder with .bin files.', 'err');
   $('open').disabled = true;
   try {
-    try { localStorage.setItem('lastFolder', path); } catch (e) {}
     const { sid } = await call('/api/folder/open', { path });
+    remember(path);
     await openWhenReady(sid, $('openMsg'));
   } catch (e) { say($('openMsg'), e.message, 'err'); }
   $('open').disabled = false;
-};
-$('path').onkeydown = e => { if (e.key === 'Enter') $('open').click(); };
+}
+$('path').value = store.get('lastFolder', '');
+$('open').onclick = openFolder;
+$('path').onkeydown = e => { if (e.key === 'Enter') openFolder(); };
+showRecent();
+
+// ------------------------------------------------------------------- scan rings
+// Static picture: LiDAR returns in rings around the sensor, one proposed box waiting for a decision.
+(function drawScan() {
+  const svg = $('scan'), NS = 'http://www.w3.org/2000/svg';
+  const add = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.appendChild(e); return e; };
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let r = 26; r <= 190; r += 11) {
+    const n = Math.round(r * 1.7);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + rnd() * 0.02;
+      const blocked = Math.abs(Math.atan2(Math.sin(a - 0.5), Math.cos(a - 0.5))) < 0.16 && r > 64;     // shadow behind the box
+      if (blocked || rnd() < 0.08 + r / 900) continue;
+      add('circle', { cx: (r * Math.cos(a)).toFixed(1), cy: (r * Math.sin(a)).toFixed(1), r: 1.15, fill: r < 70 ? '#4a5a69' : '#2c3944' });
+    }
+  }
+  const g = add('g', { transform: 'translate(' + (64 * Math.cos(0.5)) + ' ' + (64 * Math.sin(0.5)) + ') rotate(' + (0.5 * 180 / Math.PI + 12) + ')', fill: 'none', stroke: '#ffa600', 'stroke-width': 1.6 });
+  const box = document.createElementNS(NS, 'rect'); for (const [k, v] of Object.entries({ x: -21, y: -9, width: 42, height: 18, rx: 1.5 })) box.setAttribute(k, v); g.appendChild(box);
+  const fill = document.createElementNS(NS, 'rect'); for (const [k, v] of Object.entries({ x: -21, y: -9, width: 42, height: 18, fill: '#ffa600', 'fill-opacity': .1, stroke: 'none' })) fill.setAttribute(k, v); g.appendChild(fill);
+  const cross = document.createElementNS(NS, 'path'); cross.setAttribute('d', 'M21 -9 L21 9 M21 -9 L14 0 L21 9'); g.appendChild(cross);
+  add('circle', { cx: 0, cy: 0, r: 3.2, fill: '#dde4ea' });
+})();
 </script>
 </body>
 </html>

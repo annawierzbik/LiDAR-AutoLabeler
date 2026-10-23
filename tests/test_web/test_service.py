@@ -130,3 +130,12 @@ def test_closed_service_refuses_actions(svc):
     svc.close()
     with pytest.raises(LookupError, match="closed"):
         svc.act("next")
+
+
+def test_frame_marks_follow_review_progress(svc):
+    assert svc.state()["frame_marks"] == [1, 1, 1]          # every frame still has boxes to review
+    svc.act("select", index=0)
+    svc.act("accept_track")
+    svc.act("select", index=1)
+    svc.act("accept_track")
+    assert svc.state()["frame_marks"][0] == 2                # frame 0 is fully reviewed now
