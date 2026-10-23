@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiDAR AutoLabeler</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#2c313a; --text:#e6e8eb; --muted:#9aa3ad; --accent:#4da3ff; --bad:#ff7a7a; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:48px 16px; }
+  h1 { font-size:28px; margin:0 0 4px; } .lead { color:var(--muted); margin:0 0 32px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .card h2 { font-size:17px; margin:0 0 4px; } .card p { color:var(--muted); margin:0 0 14px; font-size:14px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=text] { flex:1; min-width:200px; background:#111317; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font:inherit; }
+  button { background:var(--accent); color:#06121f; border:0; border-radius:8px; padding:9px 16px; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:#272c35; color:var(--text); border:1px solid var(--line); font-weight:500; }
+  button:disabled { opacity:.45; cursor:default; }
+  input:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .msg { margin-top:12px; font-size:14px; white-space:pre-wrap; } .msg.err { color:var(--bad); } .msg.info { color:var(--muted); }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 1s linear infinite; vertical-align:-1px; margin-right:6px; }
+  @keyframes s { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>LiDAR AutoLabeler</h1>
+  <p class="lead">Semi-automatic 3D annotation of LiDAR point clouds: the system proposes boxes, you verify them.</p>
+
+  <section class="card" id="home">
+    <h2>Annotate a point cloud sequence</h2>
+    <p>Folder with <code>.bin</code> frames (x, y, z, intensity), on the computer that runs this server.</p>
+    <div class="row">
+      <input type="text" id="path" placeholder="D:\clouds\drive1  or  /data/clouds/drive1" aria-label="Folder path" autocomplete="off">
+      <button id="open">Open</button>
+    </div>
+    <div class="msg" id="openMsg" role="status"></div>
+  </section>
+
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const say = (el, text, kind = 'info') => { el.className = 'msg ' + kind; el.textContent = text; };
+const spin = (el, text) => { el.className = 'msg info'; el.innerHTML = '<span class="spin"></span>'; el.append(text); };
+
+async function call(path, body) {
+  const r = await fetch(path, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m; } catch (e) {} throw new Error(m); }
+  return r.json();
+}
+
+// wait until a session job is ready, then open the annotation page
+async function openWhenReady(sid, msgEl, title) {
+  spin(msgEl, ` Loading ${title || ''}... if detection has to run first this can take a few minutes.`);
+  for (;;) {
+    const j = await call('/api/jobs/' + sid);
+    if (j.status === 'ready') { location.href = '/annotate?sid=' + sid; return; }
+    if (j.status === 'error') throw new Error(j.message);
+    await new Promise(r => setTimeout(r, 700));
+  }
+}
+
+// ------------------------------------------------------------------- folder
+try { $('path').value = localStorage.getItem('lastFolder') || ''; } catch (e) {}
+$('open').onclick = async () => {
+  const path = $('path').value.trim();
+  if (!path) return say($('openMsg'), 'Enter the path of a folder.', 'err');
+  $('open').disabled = true;
+  try {
+    try { localStorage.setItem('lastFolder', path); } catch (e) {}
+    const { sid } = await call('/api/folder/open', { path });
+    await openWhenReady(sid, $('openMsg'));
+  } catch (e) { say($('openMsg'), e.message, 'err'); }
+  $('open').disabled = false;
+};
+$('path').onkeydown = e => { if (e.key === 'Enter') $('open').click(); };
+</script>
+</body>
+</html>

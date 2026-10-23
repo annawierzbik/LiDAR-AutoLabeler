@@ -6,7 +6,7 @@ A label dict (from `parse_tracking_labels`) has keys:
 """
 from __future__ import annotations
 
-from typing import Dict, List, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 import numpy as np
 

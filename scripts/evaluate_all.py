@@ -21,6 +21,7 @@ from evaluation.detection_metrics import DetectionEvaluator
 from evaluation.report import print_detection, print_per_sequence, print_tracking
 from evaluation.runner import available_sequences, evaluate_sequence, parse_sequence_spec
 from evaluation.tracking_metrics import pool_tracking_summaries
+from verification.paths import RESULTS_DIR
 
 
 def main() -> None:
@@ -59,7 +60,7 @@ def main() -> None:
     print_tracking(pooled, title=f"TRACKING, POOLED OVER {len(per_seq)} SEQUENCES")
     print(f"\nTotal time: {time.time() - t0:.0f} s")
 
-    out = Path(f"results/{args.name}_metrics.json")
+    out = RESULTS_DIR / f"{args.name}_metrics.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(
         {"sequences": list(per_seq), "threshold": args.threshold,

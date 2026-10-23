@@ -3,7 +3,6 @@ import numpy as np
 from pathlib import Path
 
 from ingestion.sequence import SequenceLoader
-from ingestion.frame import Frame
 
 
 def create_mock_kitti_sequence(data_root: Path, split: str, sequence: str, frame_ids: list):

@@ -14,6 +14,7 @@ from pathlib import Path
 from evaluation.detection_metrics import DetectionEvaluator
 from evaluation.report import print_detection, print_tracking
 from evaluation.runner import evaluate_sequence
+from verification.paths import RESULTS_DIR
 
 
 def main() -> None:
@@ -37,7 +38,8 @@ def main() -> None:
     print_detection(det)
     print_tracking(trk)
 
-    out = Path(f"results/{args.sequence}_metrics.json")
+    out = RESULTS_DIR / f"{args.sequence}_metrics.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"detection": det, "tracking": trk}, indent=2))
     print(f"\nSaved {out}")
 

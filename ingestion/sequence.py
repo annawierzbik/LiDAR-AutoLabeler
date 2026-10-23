@@ -13,10 +13,6 @@ class SequenceLoader:
         self.calib_path = self.data_root / split / "calib" / f"{sequence}.txt"
         self.label_path = self.data_root / split / "label_02" / f"{sequence}.txt"
 
-        print("velodyne_dir:", self.velodyne_dir)
-        print("calib_path:", self.calib_path)
-        print("label_path:", self.label_path)
-
         if not self.velodyne_dir.exists():
             raise FileNotFoundError(
                 f"Directory with point clouds not found: {self.velodyne_dir}"

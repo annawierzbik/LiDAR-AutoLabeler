@@ -5,7 +5,7 @@ All boxes follow the BoundingBox3D convention (LiDAR frame, z up, center-based).
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, List, Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 

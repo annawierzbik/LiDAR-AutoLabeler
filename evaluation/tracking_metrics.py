@@ -13,7 +13,7 @@ greedily by IoU. A change of the matched track id for one GT object is an ID swi
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Sequence
+from typing import Dict, Sequence
 
 import numpy as np
 

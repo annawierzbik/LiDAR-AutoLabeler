@@ -1,6 +1,5 @@
 import pytest
 import numpy as np
-from pathlib import Path
 
 from ingestion.loader import load_point_cloud, parse_calib_file, parse_tracking_labels
 

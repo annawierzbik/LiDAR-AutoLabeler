@@ -1,4 +1,6 @@
 # --- Core (versions verified on Windows, Python 3.11.9) ---
+# torch/torchvision "+cu124" builds are not on PyPI; install them from the PyTorch index:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu124
 numpy==1.26.4            # numpy 2.x crashes spconv/cumm
 torch==2.6.0+cu124
 torchvision==0.21.0+cu124
@@ -6,8 +8,11 @@ spconv-cu120==2.3.6
 
 # --- Data / visualization ---
 open3d
-matplotlib
 scipy
+
+# --- Web interface (scripts.web) ---
+fastapi==0.161.1
+uvicorn==0.54.0
 
 # --- OpenPCDet dependencies (SharedArray intentionally left out) ---
 llvmlite
@@ -22,3 +27,4 @@ pyquaternion
 
 # --- Dev ---
 pytest
+httpx==0.28.1            # needed by fastapi.testclient in tests/test_web

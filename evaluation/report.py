@@ -1,7 +1,7 @@
 """Console tables for evaluation results."""
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict
 
 
 def print_detection(summary: dict) -> None:

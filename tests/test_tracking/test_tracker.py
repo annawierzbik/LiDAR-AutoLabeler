@@ -1,5 +1,3 @@
-import pytest
-
 from common.boxes import BoundingBox3D
 from tracking.tracker import Tracker
 

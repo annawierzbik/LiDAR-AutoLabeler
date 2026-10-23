@@ -26,6 +26,7 @@ import numpy as np
 from common.boxes import EDGES, BoundingBox3D
 from ingestion.sequence import SequenceLoader
 from tracking.tracker import Tracker
+from verification.paths import RESULTS_DIR
 
 KEY_SPACE, KEY_R, KEY_RIGHT, KEY_LEFT = 32, 82, 262, 263
 
@@ -218,7 +219,7 @@ def main() -> None:
     args = p.parse_args()
 
     seq = SequenceLoader(Path(args.data_root), args.split, args.sequence)
-    cache = Path(args.cache or f"results/{args.sequence}.json")
+    cache = Path(args.cache) if args.cache else RESULTS_DIR / f"{args.sequence}.json"
 
     if cache.exists() and not args.no_cache:
         print(f"Loading cached results from {cache}")

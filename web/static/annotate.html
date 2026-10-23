@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Annotate - LiDAR AutoLabeler</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#2c313a; --text:#e6e8eb; --muted:#9aa3ad; --accent:#4da3ff; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; }
+  #app { display:grid; grid-template-columns: 1fr 320px; height:100%; }
+  #view { position:relative; min-width:0; }
+  #view canvas { display:block; width:100%; height:100%; }
+  #hud { position:absolute; left:12px; top:10px; color:var(--muted); font-size:13px; pointer-events:none; text-shadow:0 1px 2px #000; }
+  #panel { background:var(--panel); border-left:1px solid var(--line); padding:12px; overflow:auto; display:flex; flex-direction:column; gap:12px; }
+  h1 { font-size:15px; margin:0; } h2 { font-size:12px; margin:0 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .muted { color:var(--muted); font-size:12px; }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:6px 0 2px; }
+  .bar > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  button, select { background:#272c35; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--accent); } button:focus-visible, select:focus-visible { outline:2px solid var(--accent); }
+  input[type=range] { width:100%; }
+  #list { display:flex; flex-direction:column; gap:2px; max-height:240px; overflow:auto; }
+  .item { display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:6px; cursor:pointer; border:1px solid transparent; }
+  .item:hover { background:#272c35; } .item.sel { border-color:#fff; }
+  .chip { width:10px; height:10px; border-radius:50%; flex:none; }
+  .legend { display:grid; grid-template-columns:1fr 1fr; gap:2px 8px; font-size:12px; }
+  kbd { background:#272c35; border:1px solid var(--line); border-radius:4px; padding:0 4px; font-size:11px; }
+  #keys { font-size:12px; color:var(--muted); display:grid; grid-template-columns:auto 1fr; gap:2px 8px; }
+  #saveError { position:absolute; left:12px; right:12px; top:36px; background:#5a1d1d; border:1px solid #ff7a7a; color:#ffe1e1; padding:8px 12px; border-radius:6px; font-weight:600; }
+  #toast { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); background:#000a; padding:6px 12px; border-radius:6px; display:none; }
+  @media (max-width: 800px) { #app { grid-template-columns: 1fr; grid-template-rows: 55% 45%; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="view"><div id="hud"></div><div id="saveError" role="alert" hidden></div><div id="toast"></div></div>
+  <aside id="panel">
+    <div><h1>LiDAR AutoLabeler</h1><div class="muted" id="meta"></div>
+      <div class="row" style="margin-top:8px"><button id="home" title="Leave without finishing; progress is saved">&larr; Start screen</button><button id="finish" title="Save and close this session">Finish</button></div></div>
+    <div>
+      <h2>Progress</h2>
+      <div id="progress" class="muted"></div>
+      <div class="bar"><div id="bar"></div></div>
+      <input id="slider" type="range" min="0" max="0" value="0" aria-label="Frame">
+      <div class="row" style="margin-top:6px">
+        <button data-a="prev" title="Left arrow">&larr;</button>
+        <button id="play" title="Space">Play</button>
+        <button data-a="next" title="Right arrow">&rarr;</button>
+        <button data-a="next_pending" title="N">Next pending</button>
+      </div>
+    </div>
+    <div>
+      <h2>Decision</h2>
+      <div class="row">
+        <button data-a="accept" title="A / Enter">Accept</button>
+        <button data-a="reject" title="R / Delete">Reject</button>
+        <button data-a="accept_track" title="T">Accept track</button>
+        <button data-a="reject_track" title="X">Reject track</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button data-a="undo" title="Z">Undo</button>
+        <button data-a="redo" title="Y">Redo</button>
+        <button data-a="add" title="B">Add box</button>
+        <button data-a="copy_next" title="C">Copy to next</button>
+      </div>
+      <div class="row" style="margin-top:6px; align-items:center">
+        <label class="muted" for="cls">Class</label><select id="cls"></select>
+        <label class="muted"><input type="checkbox" id="rej"> show rejected</label>
+      </div>
+    </div>
+    <div><h2>Objects in this frame</h2><div id="list"></div></div>
+    <div><h2>Status colours</h2><div class="legend" id="legend"></div></div>
+    <div>
+      <h2>Keys</h2>
+      <div id="keys">
+        <span><kbd>&larr;</kbd> <kbd>&rarr;</kbd></span><span>previous / next frame</span>
+        <span><kbd>Space</kbd></span><span>play / pause</span>
+        <span><kbd>N</kbd></span><span>next frame with pending boxes</span>
+        <span><kbd>Tab</kbd> <kbd>[</kbd> <kbd>]</kbd></span><span>select next / previous box</span>
+        <span><kbd>A</kbd> <kbd>R</kbd></span><span>accept / reject box</span>
+        <span><kbd>T</kbd> <kbd>X</kbd></span><span>accept / reject whole track</span>
+        <span><kbd>I</kbd><kbd>K</kbd><kbd>J</kbd><kbd>L</kbd></span><span>move 10 cm (fwd, back, left, right)</span>
+        <span><kbd>PgUp</kbd> <kbd>PgDn</kbd></span><span>up / down 5 cm</span>
+        <span><kbd>,</kbd> <kbd>.</kbd></span><span>rotate 2&deg;</span>
+        <span><kbd>1</kbd>-<kbd>6</kbd></span><span>length &minus;/+, width &minus;/+, height &minus;/+</span>
+        <span><kbd>B</kbd> <kbd>C</kbd></span><span>add box / copy to next frame</span>
+        <span><kbd>Z</kbd> <kbd>Y</kbd></span><span>undo / redo</span>
+        <span>mouse</span><span>drag = rotate view, right-drag = pan, wheel = zoom, click a box = select</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const COLORS = { pending:0xffa600, accepted:0x40ff40, rejected:0x8c2626, edited:0x33e6ff, manual:0xff4dff, interpolated:0xbf8cff };
+const SELECTED = 0xffffff;
+const KEYS = {
+  ArrowRight:'next', ArrowLeft:'prev', n:'next_pending', Tab:'select_next', ']':'select_next', '[':'select_prev',
+  a:'accept', Enter:'accept', r:'reject', Delete:'reject', Backspace:'reject', t:'accept_track', x:'reject_track',
+  i:'forward', k:'back', j:'left', l:'right', PageUp:'up', PageDown:'down', ',':'rotate_left', '.':'rotate_right',
+  '1':'length_minus', '2':'length_plus', '3':'width_minus', '4':'width_plus', '5':'height_minus', '6':'height_plus',
+  b:'add', c:'copy_next', z:'undo', y:'redo'
+};
+
+const $ = id => document.getElementById(id);
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0c0e);
+THREE.Object3D.DEFAULT_UP.set(0, 0, 1);               // LiDAR frame: x forward, y left, z up
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
+camera.up.set(0, 0, 1);
+camera.position.set(-14, 0, 22);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(14, 0, 0);
+controls.update();
+const grid = new THREE.GridHelper(80, 16, 0x2a2f38, 0x1c2027);
+grid.rotateX(Math.PI / 2); grid.position.set(20, 0, -1.73);   // road level in KITTI
+scene.add(grid);
+
+let state = null, cloud = null, boxGroup = new THREE.Group(), pickables = [];
+scene.add(boxGroup);
+let pointsToken = 0, playing = false, timer = null;
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+(function loop() { requestAnimationFrame(loop); renderer.render(scene, camera); })();
+
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 1500);
+}
+
+const SID = new URLSearchParams(location.search).get('sid');
+if (!SID) location.href = '/';
+const API = '/api/s/' + SID;
+async function api(path, body) {
+  const r = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) } : undefined);
+  if (!r.ok) throw new Error(await r.text());
+  return r;
+}
+async function act(name, extra = {}) {
+  try { applyState(await (await api(API + '/action', { name, ...extra })).json()); }
+  catch (e) { toast('Error: ' + e.message); }
+}
+
+// ------------------------------------------------------------------ point cloud
+async function loadPoints(frame) {
+  const token = ++pointsToken;
+  const buf = await (await api(API + '/points/' + frame)).arrayBuffer();
+  if (token !== pointsToken) return;                   // a newer frame was requested meanwhile
+  const pos = new Float32Array(buf), n = pos.length / 3, col = new Float32Array(n * 3), c = new THREE.Color();
+  for (let i = 0; i < n; i++) {                        // colour by height: blue (low) -> yellow (high)
+    const t = Math.min(1, Math.max(0, (pos[3 * i + 2] + 2) / 4));
+    c.setHSL(0.62 - 0.5 * t, 0.8, 0.35 + 0.3 * t);
+    col[3 * i] = c.r; col[3 * i + 1] = c.g; col[3 * i + 2] = c.b;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); }
+  cloud = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.06, vertexColors: true, sizeAttenuation: true }));
+  cloud.frustumCulled = false;
+  scene.add(cloud);
+  if (state && state.frame + 1 < state.num_frames) fetch(API + '/points/' + (state.frame + 1)).catch(() => {});  // warm the cache
+}
+
+// ---------------------------------------------------------------------- boxes
+const unitEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const unitBox = new THREE.BoxGeometry(1, 1, 1);
+const frontCross = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(
+  [0.5,-0.5,-0.5, 0.5,0.5,0.5,  0.5,0.5,-0.5, 0.5,-0.5,0.5], 3));   // cross on the +x face = heading
+
+function drawBoxes() {
+  for (const ch of [...boxGroup.children]) { boxGroup.remove(ch); ch.traverse(o => o.material && o.material.dispose && o.material.dispose()); }
+  pickables = [];
+  for (const a of state.annotations) {
+    const sel = a.i === state.selected;
+    const color = sel ? SELECTED : COLORS[a.status];
+    const g = new THREE.Group();
+    g.position.set(a.x, a.y, a.z); g.rotation.z = a.heading; g.scale.set(a.dx, a.dy, a.dz);
+    g.add(new THREE.LineSegments(unitEdges, new THREE.LineBasicMaterial({ color })));
+    g.add(new THREE.LineSegments(frontCross, new THREE.LineBasicMaterial({ color })));
+    const fill = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color, transparent:true, opacity: sel ? 0.28 : 0.08, depthWrite:false }));
+    fill.userData.index = a.i; g.add(fill); pickables.push(fill);
+    boxGroup.add(g);
+  }
+}
+
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let down = null;
+renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;   // it was a drag, not a click
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObjects(pickables, false)[0];
+  act('select', { index: hit ? hit.object.userData.index : null });
+});
+
+// ---------------------------------------------------------------------- panel
+function applyState(s) {
+  const frameChanged = !state || s.frame !== state.frame;
+  state = s;
+  $('meta').textContent = `sequence ${s.sequence} · ${s.mode} mode`;
+  const st = s.stats;
+  $('progress').textContent = `frame ${s.frame + 1}/${s.num_frames} · reviewed ${st.reviewed}/${st.total} (${Math.round(st.reviewed_fraction * 100)}%)`;
+  $('bar').style.width = (st.reviewed_fraction * 100) + '%';
+  const sl = $('slider'); sl.max = s.num_frames - 1; sl.value = s.frame;
+  const cls = $('cls');
+  if (!cls.options.length) for (const c of s.classes) cls.add(new Option(c, c));
+  cls.value = s.current_class; $('rej').checked = s.show_rejected;
+  const list = $('list'); list.replaceChildren();
+  for (const a of s.annotations) {
+    const d = document.createElement('div');
+    d.className = 'item' + (a.i === s.selected ? ' sel' : '');
+    d.innerHTML = `<span class="chip" style="background:#${COLORS[a.status].toString(16).padStart(6, '0')}"></span>` +
+      `<span>${a.track_id != null ? '#' + a.track_id : '·'} ${a.label}</span>` +
+      `<span class="muted" style="margin-left:auto">${a.status}${a.status === 'pending' ? ' ' + a.score.toFixed(2) : ''}</span>`;
+    d.onclick = () => act('select', { index: a.i });
+    list.appendChild(d);
+  }
+  $('hud').textContent = s.annotations.length ? '' : 'No boxes in this frame (press B to add one)';
+  const se = $('saveError');                           // autosave failed: your latest changes are NOT on disk
+  se.hidden = !s.save_error;
+  se.textContent = s.save_error ? 'Not saved! ' + s.save_error : '';
+  drawBoxes();
+  if (frameChanged) loadPoints(s.frame).catch(e => toast('Could not load points: ' + e.message));
+}
+
+for (const b of document.querySelectorAll('button[data-a]')) b.onclick = () => act(b.dataset.a);
+$('slider').oninput = e => act('goto', { frame: +e.target.value });
+$('cls').onchange = e => act('set_class', { label: e.target.value });
+$('rej').onchange = () => act('toggle_rejected');
+$('legend').innerHTML = Object.entries(COLORS).map(([k, v]) =>
+  `<span><span class="chip" style="display:inline-block;background:#${v.toString(16).padStart(6, '0')}"></span> ${k}</span>`).join('');
+
+function setPlaying(on) {
+  playing = on; $('play').textContent = on ? 'Pause' : 'Play';
+  clearInterval(timer);
+  if (on) timer = setInterval(async () => {
+    if (state.frame + 1 >= state.num_frames) return setPlaying(false);
+    await act('play_step');
+  }, 250);
+}
+$('play').onclick = () => setPlaying(!playing);
+
+$('home').onclick = () => { location.href = '/'; };
+$('finish').onclick = async () => {
+  if (!confirm('Finish this session? Your annotations are saved.')) return;
+  try { await api(API + '/finish', {}); location.href = '/'; } catch (e) { toast('Error: ' + e.message); }
+};
+
+addEventListener('keydown', e => {
+  if (e.target.matches('select, input[type=text]') || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === ' ') { e.preventDefault(); setPlaying(!playing); return; }
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const name = KEYS[key];
+  if (!name) return;
+  e.preventDefault();
+  if (!e.repeat || ['forward','back','left','right','up','down','rotate_left','rotate_right','next','prev'].includes(name)) act(name);
+});
+
+api(API + '/state').then(r => r.json()).then(applyState).catch(e => toast('Cannot reach the server: ' + e.message));
+</script>
+</body>
+</html>

@@ -20,6 +20,7 @@ from ingestion.calibration import Calibration
 from ingestion.loader import parse_tracking_labels
 from ingestion.sequence import SequenceLoader
 from tracking.tracker import Tracker
+from verification.paths import RESULTS_DIR
 
 RAW_THRESHOLD = 0.1  # low on purpose: AP needs the whole score range
 _detector = None     # created once, reused for all sequences
@@ -107,7 +108,7 @@ def evaluate_sequence(
     labels = parse_tracking_labels(label_path)
 
     indices = range(start, min(stop if stop is not None else len(seq), len(seq)))
-    detections = load_or_detect(seq, indices, Path(f"results/{sequence}_detections.json"), use_cache)
+    detections = load_or_detect(seq, indices, RESULTS_DIR / f"{sequence}_detections.json", use_cache)
 
     trk_eval, tracker = TrackingEvaluator(), Tracker()
     for i, dets in zip(indices, detections):

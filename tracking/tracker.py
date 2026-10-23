@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List
 
 import numpy as np
@@ -27,8 +27,6 @@ class Track:
     score: float
     hits: int = 1
     misses: int = 0  # consecutive frames without a match
-    age: int = 1
-    history: List[BoundingBox3D] = field(default_factory=list)
 
     @classmethod
     def from_box(cls, box: BoundingBox3D, track_id: int) -> "Track":
@@ -54,7 +52,6 @@ class Track:
 
     def predict(self) -> BoundingBox3D:
         self.kf.predict()
-        self.age += 1
         return self.to_box()
 
     def update(self, box: BoundingBox3D, dim_alpha: float = 0.3) -> None:
@@ -116,9 +113,7 @@ class Tracker:
         for t in self.tracks:
             confirmed = t.hits >= self.min_hits or self.frame_count <= self.min_hits
             if t.misses == 0 and confirmed:
-                box = t.to_box()
-                t.history.append(box)
-                out.append(box)
+                out.append(t.to_box())
         return out
 
     def _associate(self, predicted, detections):
