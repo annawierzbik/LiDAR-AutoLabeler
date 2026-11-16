@@ -1,5 +1,6 @@
 # Development and test tools (not needed to run the application).
 #   pip install -r requirements-dev.txt
 #   python -m playwright install chromium        # browser for tests/e2e (pytest -m e2e)
+pytest==8.4.2            # same pin as requirements.txt; pytest-playwright 0.6.2 needs pytest < 9
 playwright==1.49.1
 pytest-playwright==0.6.2

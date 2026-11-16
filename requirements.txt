@@ -27,5 +27,5 @@ opencv-python
 pyquaternion
 
 # --- Dev ---
-pytest
+pytest==8.4.2            # same pin as requirements-dev.txt; pytest-playwright 0.6.2 needs pytest < 9
 httpx==0.28.1            # needed by fastapi.testclient in tests/test_web
