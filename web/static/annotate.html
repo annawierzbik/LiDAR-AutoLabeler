@@ -329,15 +329,23 @@ async function act(name, extra = {}) {
     return s;
   } catch (e) { toast('Error: ' + e.message); return null; }
 }
-// show another frame; `log` records the frame change in the session's event log (not for playback)
+// show another frame; `log` records the frame change in the session's event log (not for playback).
+// Quick key presses must add up (two Right presses = two frames) although the first answer has
+// not arrived yet: steps start from the frame being loaded, and only the newest answer is shown.
+let navTarget = null, navToken = 0;
+const navBase = () => navTarget ?? ui.frame;
 async function show(frame, log = true) {
-  if (!state || frame < 0 || frame >= state.num_frames || frame === ui.frame) return;
+  if (!state || frame < 0 || frame >= state.num_frames || frame === navBase()) return;
+  navTarget = frame;
+  const token = ++navToken;
   try {
     const s = log ? await (await api(API + '/action', { name: 'view', frame })).json()
                   : await (await api(`${API}/state?frame=${frame}`)).json();
+    if (token !== navToken) return;                    // a newer navigation is on its way
     ui.selected = null;
     applyState(s);
   } catch (e) { toast('Error: ' + e.message); }
+  finally { if (token === navToken) navTarget = null; }
 }
 
 // ------------------------------------------------------------------ selection
@@ -403,7 +411,7 @@ async function nextPending() {
 function toggleRejected(on) { ui.showRejected = on; clampSelection(); render(); }
 
 const ACTIONS = {
-  next: () => show(ui.frame + 1), prev: () => show(ui.frame - 1), next_pending: nextPending,
+  next: () => show(navBase() + 1), prev: () => show(navBase() - 1), next_pending: nextPending,
   select_next: () => selectStep(1), select_prev: () => selectStep(-1),
   accept: () => decide('accept'), reject: () => decide('reject'),
   accept_track: () => trackAction('accept_track'), reject_track: () => trackAction('reject_track'),
@@ -600,6 +608,7 @@ function render() {
   $('empty').textContent = shown.length ? '' : 'No boxes in this frame. Press B to add one.';
   drawBoxes();
   scheduleExport();
+  saveView();
 }
 
 for (const b of document.querySelectorAll('button[data-a]')) b.onclick = e => { run(b.dataset.a); if (e.detail > 0) b.blur(); };
@@ -667,7 +676,13 @@ addEventListener('keydown', e => {
   if (!e.repeat || REPEATABLE.includes(name)) run(name);
 });
 
-api(API + '/state?frame=0').then(r => r.json()).then(applyState).catch(e => toast('Cannot reach the server: ' + e.message));
+// the view state of this tab survives a reload (F5): sessionStorage is per tab and per session id
+function saveView() { try { sessionStorage.setItem(VIEW_KEY, JSON.stringify(ui)); } catch (e) {} }
+function loadView() { try { return JSON.parse(sessionStorage.getItem(VIEW_KEY) || 'null'); } catch (e) { return null; } }
+const VIEW_KEY = 'view:' + SID, saved = loadView();
+if (saved) Object.assign(ui, saved);
+api(`${API}/state?frame=${ui.frame}`).catch(() => api(API + '/state?frame=0'))   // the saved frame may no longer exist
+  .then(r => r.json()).then(applyState).catch(e => toast('Cannot reach the server: ' + e.message));
 </script>
 </body>
 </html>

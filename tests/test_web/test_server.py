@@ -74,7 +74,9 @@ def test_finish_removes_the_job_and_stops_actions(env, sid):
     client = env[0]
     assert client.post(f"/api/s/{sid}/finish").status_code == 200
     assert client.get(f"/api/jobs/{sid}").status_code == 404
-    assert client.post(f"/api/s/{sid}/action", json={"name": "add", "frame": 0, "label": "Car"}).status_code == 404
+    r = client.post(f"/api/s/{sid}/action", json={"name": "add", "frame": 0, "label": "Car"})
+    assert r.status_code == 409 and "finished" in r.json()["detail"]      # a tab left open on it
+    assert client.get(f"/api/s/{sid}/state").status_code == 409
 
 
 def test_second_tab_is_refused_with_a_message_until_finish(env, sid):

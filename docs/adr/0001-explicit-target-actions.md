@@ -31,3 +31,7 @@ not run as several stateless replicas (phase 4).
   decision are implemented in the browser (they were in the controller before).
 - Box indices are per frame and can shift (rejecting a manual box removes it); the browser
   re-reads the frame from every response.
+- The view state is kept per tab in `sessionStorage` (key `view:<sid>`), so a reload (F5) shows
+  the same frame, selection, class and "show rejected" setting.
+- Frame steps are relative to the frame being loaded, not to the last one shown, so quick key
+  presses add up as they did with the server-side cursor; out-of-date answers are dropped.

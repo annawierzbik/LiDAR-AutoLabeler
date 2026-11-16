@@ -119,8 +119,8 @@ def test_finished_session_accepts_no_more_actions(mgr, tmp_path):
     svc = mgr.service(sid)
     mgr.finish(sid)
     saved = mgr.store.path(svc.key).read_text()
-    with pytest.raises(KeyError):
-        mgr.service(sid)
+    with pytest.raises(LookupError, match="finished"):
+        mgr.service(sid)                            # not KeyError: the API answers 409, not 404
     with pytest.raises(LookupError):
         svc.act("add", frame=0, label="Car")        # a stale reference cannot change it either
     assert mgr.store.path(svc.key).read_text() == saved

@@ -80,6 +80,7 @@ class SessionManager:
         self.queue = queue or ThreadJobQueue(background=background)
         self.store = store or FileSessionStore(get_settings().session_dir)
         self.jobs: dict[str, Job] = {}
+        self.finished: set[str] = set()   # sids of finished sessions (a few bytes each, kept for 409s)
 
     # ------------------------------------------------------------------ jobs
     def start_job(self, args, title: str) -> str:
@@ -115,7 +116,10 @@ class SessionManager:
         return self.jobs[sid]
 
     def service(self, sid: str) -> ReviewService:
-        """KeyError for unknown ids, LookupError while loading, when refused or when closed."""
+        """KeyError for unknown ids, LookupError while loading, when refused or when finished
+        (a tab still open on a finished session gets 409, not 404)."""
+        if sid in self.finished:
+            raise LookupError(f"session {sid} was finished and is closed")
         job = self.job(sid)
         service = job.service
         if service is None:
@@ -131,6 +135,7 @@ class SessionManager:
             service.close()
             self.store.unlock(job.key, sid)
         del self.jobs[sid]
+        self.finished.add(sid)
 
     # ---------------------------------------------------------------- folder
     def open_folder(self, path: str) -> str:
