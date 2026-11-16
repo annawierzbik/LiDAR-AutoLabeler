@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import os
 import time
+import weakref
 
 from common.boxes import BoundingBox3D
 
-LOADS = 0      # FakeDetector objects made in this process
+LOADS = 0                      # FakeDetector objects made in this process
+ALIVE = weakref.WeakSet()      # those not garbage collected yet
 
 
 class FakeDetector:
@@ -23,6 +25,7 @@ class FakeDetector:
         self.score_threshold, self.fov = score_threshold, fov
         self.delay = float(os.environ.get("LAL_FAKE_DETECTOR_DELAY", "0"))
         self.calls = 0
+        ALIVE.add(self)
 
     def predict(self, frame, image_size=None):
         if self.delay:

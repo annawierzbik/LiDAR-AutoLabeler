@@ -17,7 +17,7 @@ Status: accepted (phase 3)
   progress and a Cancel button (`POST /api/jobs/<sid>/cancel`). Exports can run as tasks
   (`POST /api/s/<sid>/export_jobs`, `GET /api/tasks/<id>`, `GET /api/tasks/<id>/download`); the
   annotation page keeps its direct download for now.
-- **One detector per worker process** (`infra/worker_detector.py`): a process loads the configuration
+- **One detector per GPU worker process** (`infra/worker_detector.py`): a process loads the configuration
   of `LAL_WORKER_DETECTOR_*` (config, checkpoint, score threshold, factory) once, on its first job.
   A job whose cache metadata needs another configuration fails with a message naming both; it never
   runs on the wrong model. The FOV crop is a per-job setting of the loaded detector.
@@ -46,7 +46,8 @@ The `solo` pool runs one job at a time in the worker process itself (prefork doe
 Windows); start more cpu workers for more parallel exports. Linux containers follow in phase 5.
 
 ## Consequences
-- With `LAL_JOB_QUEUE=thread` the API process holds the detector after its first detection (it was
-  made and dropped per run before); with `celery` only gpu workers do.
+- With `LAL_JOB_QUEUE=thread` every detection job makes a detector with its own configuration
+  (including its score threshold) and releases it afterwards, as before the queue existed; only GPU
+  worker processes keep a model loaded (and only that one configuration).
 - The web manager's opening job waits in an API thread; if the API restarts meanwhile, the
   detection still finishes in the worker and a new opening finds it in the cache.

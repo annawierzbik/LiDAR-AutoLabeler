@@ -103,17 +103,48 @@ def test_duplicate_submit_returns_the_same_job(env):
     assert q.submit("detect_track", payload(env.folder, threshold=0.5, start=2)) != a
 
 
-def test_one_detector_per_process(env):
+def test_thread_mode_makes_and_releases_a_detector_per_job(env):
+    import gc
+
     q = ThreadTaskQueue(background=False)
     q.submit("detect_track", payload(env.folder, start=0, stop=5))
     q.submit("detect_track", payload(env.folder, start=5, stop=9))
-    assert tests.fakes.LOADS == 1
+    gc.collect()
+    assert tests.fakes.LOADS == 2 and len(tests.fakes.ALIVE) == 0   # made per job, nothing kept
+    assert not worker_detector.loaded()
 
 
-def test_another_detector_configuration_fails_clearly(env):
+def test_thread_mode_uses_the_jobs_own_threshold(env):
     q = ThreadTaskQueue(background=False)
-    st = q.status(q.submit("detect_track", payload(env.folder, threshold=0.7)))    # worker has 0.5
-    assert st.state == "failed" and "another detector loaded" in st.message and "score_threshold" in st.message
+    st = q.status(q.submit("detect_track", payload(env.folder, threshold=0.7)))
+    assert st.state == "done", st.message                           # as before phase 3
+
+
+class WorkerCtx:
+    """The context of a GPU worker process (keeps one detector)."""
+    keeps_detector = True
+
+    def progress(self, fraction, message=""):
+        pass
+
+    def should_stop(self):
+        return False
+
+
+def test_a_worker_loads_one_detector_and_keeps_it(env):
+    from infra.tasks import detect_track
+
+    detect_track(payload(env.folder, start=0, stop=5), WorkerCtx())
+    detect_track(payload(env.folder, start=5, stop=9), WorkerCtx())
+    assert tests.fakes.LOADS == 1 and worker_detector.loaded()
+
+
+def test_a_worker_refuses_another_detector_configuration(env):
+    from infra.tasks import detect_track
+    from infra.worker_detector import DetectorMismatch
+
+    with pytest.raises(DetectorMismatch, match="another detector loaded.*score_threshold"):
+        detect_track(payload(env.folder, threshold=0.7), WorkerCtx())          # the worker has 0.5
     assert tests.fakes.LOADS == 0 and cache_files(env.results) == []
 
 

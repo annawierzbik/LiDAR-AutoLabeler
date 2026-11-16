@@ -107,6 +107,8 @@ class TaskQueue(Protocol):
 
 
 class _ThreadContext:
+    keeps_detector = False      # thread mode: a detector per job, released afterwards
+
     def __init__(self, job: JobStatus, stop: threading.Event) -> None:
         self.job, self.stop = job, stop
 

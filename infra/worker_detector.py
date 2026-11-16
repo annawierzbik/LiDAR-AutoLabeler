@@ -1,9 +1,13 @@
-"""The one detector a worker process holds (docs/adr/0015).
+"""Detectors for detection jobs (docs/adr/0015).
 
-A process loads one detector configuration (LAL_WORKER_DETECTOR_*: config, checkpoint, score
-threshold) once, on its first detection job, and keeps it. A job states the configuration it needs
-(the cache metadata of its run); if that is not the one loaded, the job fails with DetectorMismatch
-naming both, instead of silently running another model.
+GPU worker processes (Celery): a process loads one detector configuration (LAL_WORKER_DETECTOR_*:
+config, checkpoint, score threshold) once, on its first detection job, and keeps it. A job states
+the configuration it needs (the cache metadata of its run); if that is not the one loaded, the job
+fails with DetectorMismatch naming both, instead of silently running another model (`get_detector`).
+
+Thread mode (LAL_JOB_QUEUE=thread, inside the API process): as before the job queue existed, every
+job makes a detector with its own configuration and releases it afterwards (`make_for_job`,
+`release`), so the API process holds no model between jobs.
 """
 from __future__ import annotations
 
@@ -53,12 +57,33 @@ def get_detector(required: dict, fov: str):
     with _lock:
         if _loaded is None:
             mine = worker_config()
-            module, _, name = mine["factory"].partition(":")
-            factory = getattr(importlib.import_module(module), name)
-            _loaded = factory(cfg_file=mine["detector_config"], checkpoint=mine["checkpoint"],
-                              score_threshold=mine["score_threshold"], fov=fov)
+            _loaded = _factory()(cfg_file=mine["detector_config"], checkpoint=mine["checkpoint"],
+                                 score_threshold=mine["score_threshold"], fov=fov)
         _loaded.fov = fov
         return _loaded
+
+
+def _factory():
+    module, _, name = get_settings().worker_detector_factory.partition(":")
+    return getattr(importlib.import_module(module), name)
+
+
+def make_for_job(required: dict, fov: str):
+    """A detector with exactly the job's configuration, for one job (thread mode)."""
+    return _factory()(cfg_file=required["detector_config"], checkpoint=required["checkpoint"],
+                      score_threshold=required["score_threshold"], fov=fov)
+
+
+def release() -> None:
+    """Give the GPU memory of a dropped per-job detector back (thread mode). Call it after the last
+    reference to the detector is gone."""
+    import gc
+    import sys
+
+    gc.collect()
+    torch = sys.modules.get("torch")
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def loaded() -> bool:

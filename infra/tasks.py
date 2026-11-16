@@ -22,6 +22,10 @@ GPU, CPU = "gpu", "cpu"
 
 
 class TaskContext(Protocol):
+    keeps_detector: bool
+    """True in a GPU worker process (one detector, loaded once); False in thread mode (a detector
+    per job, released afterwards)."""
+
     def progress(self, fraction: float, message: str = "") -> None:
         """Report progress (0..1); implementations throttle the writes."""
 
@@ -56,7 +60,7 @@ def detect_track_payload(args) -> dict:
 def detect_track(payload: dict, ctx: TaskContext) -> dict:
     from detection.fov import sequence_mode
     from infra.sequences import open_blob_sequence
-    from infra.worker_detector import get_detector
+    from infra.worker_detector import get_detector, make_for_job, release
     from pipeline.detect_track import (
         Cancelled,
         current_meta,
@@ -78,12 +82,17 @@ def detect_track(payload: dict, ctx: TaskContext) -> dict:
         ctx.progress(1.0, "found in the detection cache")
         return {"cached": True, "frames": len(want)}
     ctx.progress(0.0, "loading the detector")
-    detector = get_detector(meta, args.fov)
+    keep = getattr(ctx, "keeps_detector", False)
+    detector = get_detector(meta, args.fov) if keep else make_for_job(meta, args.fov)
     try:
         results = track_sequence(seq, want, args.threshold, args.fov, detector=detector,
                                  should_stop=ctx.should_stop, progress=lambda f: ctx.progress(f, "detecting"))
     except Cancelled as exc:
         raise JobCancelled(str(exc)) from None
+    finally:
+        if not keep:
+            detector = None                                         # the only reference
+            release()
     blobs = results_blobs()
     key = cache.output_key(blobs, cache_key_name(name, want, len(seq)), meta)
     write_results(blobs, key, want, results, meta)

@@ -65,6 +65,8 @@ class _WorkerContext:
     table gets one write per interval, not one per frame. should_stop() reads the flag at the same
     rate."""
 
+    keeps_detector = True       # a GPU worker loads its one detector once and keeps it
+
     def __init__(self, store, job_id: str) -> None:
         self.store, self.job_id = store, job_id
         self.interval = settings.job_heartbeat_seconds
