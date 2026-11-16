@@ -111,6 +111,15 @@ def console_errors(page, context):
     errors = ConsoleErrors()
     errors.watch(page)
     context.on("page", errors.watch)            # pages opened later (a second tab)
+
+    def offline(route):                          # the page must not need the internet (vendored assets)
+        if route.request.url.startswith("http://127.0.0.1:"):
+            route.continue_()
+        else:
+            errors.errors.append(f"external request: {route.request.url}")
+            route.abort()
+
+    context.route("**/*", offline)
     yield errors
     bad = errors.unexpected()
     assert bad == [], "browser console errors:\n" + "\n".join(bad)

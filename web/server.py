@@ -2,6 +2,7 @@
 
     GET  /                          start screen (open a folder)
     GET  /annotate?sid=<id>         the annotation page of one open session
+    GET  /static/...                vendored assets (three.js 0.160.0, Schibsted Grotesk), no CDN
     POST /api/folder/open           {"path": "..."}              -> {"sid"}
     GET  /api/jobs/<sid>            loading | ready | error  (404 once the job failed or was finished)
     GET  /api/s/<sid>/state?frame=  boxes of that frame, stats, timeline marks, save_error, revision
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from export import FORMATS, ExportError, zip_files
@@ -42,6 +44,7 @@ class FolderRequest(BaseModel):
 
 def create_app(manager: SessionManager) -> FastAPI:
     app = FastAPI(title="LiDAR-AutoLabeler")
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")   # vendored three.js and font
 
     def service(sid: str):
         try:

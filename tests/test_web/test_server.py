@@ -89,3 +89,18 @@ def test_second_tab_is_refused_with_a_message_until_finish(env, sid):
     client.post(f"/api/s/{sid}/finish")
     again = client.post("/api/folder/open", json={"path": str(tmp / "clouds")}).json()["sid"]
     assert client.get(f"/api/jobs/{again}").json()["status"] == "ready"
+
+
+def test_vendored_assets_are_served_and_pages_need_no_cdn(env):
+    import re
+
+    from web.server import STATIC
+
+    client = env[0]
+    r = client.get("/static/vendor/three-0.160.0/build/three.module.js")
+    assert r.status_code == 200 and "const REVISION = '160';" in r.text
+    assert client.get("/static/vendor/three-0.160.0/examples/jsm/controls/OrbitControls.js").status_code == 200
+    assert client.get("/static/vendor/schibsted-grotesk/font.css").status_code == 200
+    for page in ("home.html", "annotate.html"):
+        urls = re.findall(r"https?://[^\s'\"<>)]+", (STATIC / page).read_text(encoding="utf-8"))
+        assert [u for u in urls if not u.startswith("http://www.w3.org/")] == [], page

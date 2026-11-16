@@ -5,7 +5,8 @@
 
 Assertions use the API state and the visible DOM, never pixels. Box selection is driven through
 the keyboard and the box list; picking a box by clicking it in the 3D view is not tested (see
-the bottom of this file). The page loads three.js from a CDN, so these tests need network access.
+the bottom of this file). Every request outside 127.0.0.1 is blocked and fails the test: the
+page must work offline (three.js and the font are vendored in web/static/vendor).
 """
 from __future__ import annotations
 

@@ -18,4 +18,5 @@ Status: accepted (phase 1)
 ## Not covered
 Picking a box by clicking it in the 3D view, orbit / pan / zoom, the view buttons, and whether
 boxes and points are drawn correctly. Selection is tested through the keyboard and the box list.
-The page loads three.js from a CDN (vendored in phase 5), so the tests need network access.
+Every request outside 127.0.0.1 is blocked and fails the test, so the tests also prove that the
+page works offline (three.js and the font are vendored in `web/static/vendor`).
