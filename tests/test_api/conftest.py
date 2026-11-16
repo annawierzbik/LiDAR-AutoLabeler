@@ -63,6 +63,9 @@ class Client:
     def post(self, path, json=None, **kw):
         return self.http.post(path, json=json, headers=self.headers(kw.pop("headers", None)), **kw)
 
+    def delete(self, path, **kw):
+        return self.http.delete(path, headers=self.headers(kw.pop("headers", None)), **kw)
+
     def upload(self, data: bytes, name="drive"):
         return self.post(f"/api/v1/sequences/upload?name={name}", content=data,
                          headers={"Content-Type": "application/zip"})

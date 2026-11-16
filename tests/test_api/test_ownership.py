@@ -29,6 +29,8 @@ def endpoints(w) -> list[tuple[str, str, dict | None]]:
     seq, sid, export, job = w["seq"], w["sid"], w["export"], w["open_job"]
     return [
         ("get", f"/api/v1/sequences/{seq}", None),
+        ("delete", f"/api/v1/sequences/{seq}", None),
+        ("delete", f"/api/v1/sequences/{seq}?force=true", None),
         ("post", "/api/v1/tabs", {"sequence_id": seq, "mode": "manual"}),
         ("get", f"/api/v1/tabs/{sid}", None),
         ("post", f"/api/v1/tabs/{sid}/cancel", {}),
@@ -48,7 +50,7 @@ def endpoints(w) -> list[tuple[str, str, dict | None]]:
 
 
 def call(client, method, path, body):
-    return client.get(path) if method == "get" else client.post(path, body)
+    return getattr(client, method)(path) if body is None else client.post(path, body)
 
 
 def test_every_endpoint_hides_other_users_resources(world):

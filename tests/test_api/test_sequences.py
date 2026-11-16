@@ -187,3 +187,59 @@ def test_a_session_from_before_phase_4_opens_after_it_is_assigned(api, admin, an
     sid = api.open_tab(anna, seq["id"], "manual")
     boxes = anna.get(f"/api/v1/tabs/{sid}/state?frame=1").json()["annotations"]
     assert [b["x"] for b in boxes] == [7.5]
+
+
+# ------------------------------------------------------------------ delete
+def _open_and_cache(api, client, seq_id):
+    """A tab opened in assisted mode: a session and a detection-cache entry of the sequence."""
+    return api.open_tab(client, seq_id, "assisted")
+
+
+def test_the_owner_deletes_an_upload_without_sessions(api, anna):
+    seq = anna.upload(frames_zip()).json()
+    prefix = uploads(api)[0]
+    r = anna.delete(f"/api/v1/sequences/{seq['id']}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"id": seq["id"], "sessions_deleted": [], "frames_deleted": FRAMES, "cache_deleted": []}
+    assert uploads(api) == [] and prefix
+    assert anna.get(f"/api/v1/sequences/{seq['id']}").status_code == 404
+    assert anna.delete(f"/api/v1/sequences/{seq['id']}").status_code == 404
+
+
+def test_delete_is_refused_while_sessions_exist_unless_an_admin_forces_it(api, anna, admin):
+    from pipeline.session_builder import results_blobs
+
+    seq = anna.upload(frames_zip()).json()
+    sid = _open_and_cache(api, anna, seq["id"])
+    cached = [k for k in results_blobs().list() if k.startswith("seq-")]
+    assert len(cached) == 1                                            # the detection cache of the upload
+    r = anna.delete(f"/api/v1/sequences/{seq['id']}")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "in_use"
+    key = r.json()["error"]["details"]["sessions"][0]
+    r = anna.delete(f"/api/v1/sequences/{seq['id']}?force=true")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden"   # force is for admins
+    assert anna.get(f"/api/v1/tabs/{sid}/state?frame=0").status_code == 200    # nothing was deleted
+    r = admin.delete(f"/api/v1/sequences/{seq['id']}")
+    assert r.status_code == 409                                        # an admin needs force too
+    r = admin.delete(f"/api/v1/sequences/{seq['id']}?force=true")
+    assert r.status_code == 200, r.text
+    assert r.json()["sessions_deleted"] == [key] and r.json()["cache_deleted"] == cached
+    assert r.json()["frames_deleted"] == FRAMES and uploads(api) == []
+    assert not api.svc.sessions.exists(key) and [k for k in results_blobs().list() if k.startswith("seq-")] == []
+    assert anna.get(f"/api/v1/tabs/{sid}").status_code == 404           # the tab went with it
+
+
+def test_delete_is_refused_while_the_sequence_is_being_opened(api, anna, admin):
+    seq = anna.upload(frames_zip()).json()
+    anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "manual"})       # queued, not run yet
+    r = admin.delete(f"/api/v1/sequences/{seq['id']}?force=true")
+    assert r.status_code == 409 and list(r.json()["error"]["details"]) == ["jobs"]
+    api.drain()
+    assert admin.delete(f"/api/v1/sequences/{seq['id']}?force=true").status_code == 200
+
+
+def test_registered_folders_are_not_deleted(api, admin):
+    seq = admin.post("/api/v1/sequences/register", {"path": "drive_a"}).json()
+    r = admin.delete(f"/api/v1/sequences/{seq['id']}?force=true")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "not_an_upload"
+    assert (api.env.data_root / "drive_a").is_dir()

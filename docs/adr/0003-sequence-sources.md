@@ -30,6 +30,16 @@ folders are registered by an admin below `LAL_DATA_ROOT`. `FileSessionStore` rem
 `scripts/bench_session_store.py` and the unit tests, `ThreadTaskQueue` for the tests; the
 file-only CLI scripts (detection, tracking, evaluation, export of a session file) use neither.
 
+**Deleting an upload** (`DELETE /api/v1/sequences/<id>`, added after phase 4): its owner or an
+admin. Refused with 409 `in_use` while sessions of it exist (`sessions.sequence_id`) unless an
+admin sends `force=true`, which deletes those sessions too, and always while an opening of it is
+queued or running. The row, its tabs and (forced) sessions go in one transaction that locks the
+row; then the uploaded frames (uploads BlobStore, prefix = the sequence's location) and its
+detection-cache entries (the names the session builder gives that sequence, `is_cache_name`) are
+deleted. Blobs are not transactional: if their deletion fails after the commit, they remain as
+orphans (the request answers 500 and the error is logged). Registered folders answer 409
+`not_an_upload`: their files belong to the data root. Exports already made expire on their own.
+
 ## Consequences
 - The uploads BlobStore is a `LocalBlobStore` on `LAL_UPLOAD_ROOT` (default
   `<results_dir>/uploads`), so an uploaded sequence is also a folder (`spec = {"folder": ...}`)

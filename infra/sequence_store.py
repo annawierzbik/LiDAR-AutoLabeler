@@ -20,11 +20,11 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.engine import Engine
 
 from infra.blob import LocalBlobStore
-from infra.db import SequenceRow
+from infra.db import JobRow, SequenceRow, SessionRow, TabRow
 
 MAX_MEMBERS = 100_000
 CHUNK = 1 << 20
@@ -36,6 +36,14 @@ class UploadRejected(ValueError):
 
 class TooLarge(UploadRejected):
     pass
+
+
+class InUse(Exception):
+    """A sequence cannot be deleted yet; `reason` is "sessions" or "jobs", `items` the keys / ids."""
+
+    def __init__(self, reason: str, items: list[str]) -> None:
+        super().__init__(f"{reason}: {', '.join(items)}")
+        self.reason, self.items = reason, items
 
 
 def _safe_name(name: str) -> PurePosixPath:
@@ -168,6 +176,31 @@ class SequenceStore:
             raise KeyError(seq_id)
         return {**_view(row), "spec": dict(row.spec)}
 
+    def delete(self, seq_id: int, force: bool = False) -> dict:
+        """Delete the row of a sequence, its tabs and (with `force`) its sessions, in one
+        transaction; returns the deleted row's view, its spec and location and the deleted session
+        keys. The files are the caller's (delete_upload). InUse("jobs") while an opening of it is
+        queued or running (also with `force`), InUse("sessions") while sessions of it exist and
+        `force` is false. The row is locked first, so a tab created at the same time either comes
+        before (and is counted) or fails on the missing row."""
+        with self.engine.begin() as c:
+            row = c.execute(select(*COLUMNS).where(SequenceRow.id == seq_id).with_for_update()).first()
+            if row is None:
+                raise KeyError(seq_id)
+            jobs = c.execute(select(JobRow.id).where(JobRow.payload["sequence_id"].as_integer() == seq_id,
+                                                     JobRow.state.in_(("queued", "running", "cancelling")))
+                             .order_by(JobRow.id)).scalars().all()
+            if jobs:
+                raise InUse("jobs", list(jobs))
+            sessions = c.execute(select(SessionRow.key).where(SessionRow.sequence_id == seq_id)
+                                 .order_by(SessionRow.key)).scalars().all()
+            if sessions and not force:
+                raise InUse("sessions", list(sessions))
+            c.execute(delete(TabRow).where(TabRow.sequence_id == seq_id))
+            c.execute(delete(SessionRow).where(SessionRow.sequence_id == seq_id))   # frames, history, events cascade
+            c.execute(delete(SequenceRow).where(SequenceRow.id == seq_id))
+        return {**_view(row), "spec": dict(row.spec), "location": row.location, "sessions": list(sessions)}
+
     def page(self, owner_id: int | None, limit: int, offset: int) -> tuple[list[dict], int]:
         cond = [] if owner_id is None else [SequenceRow.owner_id == owner_id]
         with self.engine.connect() as c:
@@ -179,3 +212,22 @@ class SequenceStore:
 
 def new_upload_prefix() -> str:
     return f"seq-{uuid.uuid4().hex[:16]}"
+
+
+def delete_upload_files(seq: dict, uploads, results) -> dict:
+    """Remove the frames of a deleted upload (uploads BlobStore, prefix = its location) and its
+    detection-cache entries (results BlobStore: <file key>[_f<a>-<b>][_c<config>].json, the names
+    the session builder gives that sequence). Returns the counts and the cache keys removed."""
+    from pipeline.session_builder import file_names, make_args
+    from verification.cache import is_cache_name
+
+    frames = uploads.list(seq["location"] + "/")
+    for key in frames:
+        uploads.delete(key)
+    if isinstance(uploads, LocalBlobStore):
+        _remove_empty(uploads.root / seq["location"])
+    name = file_names(make_args(**seq["spec"]))[1]
+    cached = [k for k in results.list(name) if "/" not in k and k.endswith(".json") and is_cache_name(k[:-5], name)]
+    for key in cached:
+        results.delete(key)
+    return {"frames_deleted": len(frames), "cache_deleted": cached}

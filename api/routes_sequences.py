@@ -13,8 +13,10 @@ from api.deps import AdminUser, CurrentUser, Page, Svc, owner_filter
 from api.errors import ApiError, not_found, responses
 from infra.blob import LocalBlobStore
 from infra.sequence_store import (
+    InUse,
     TooLarge,
     UploadRejected,
+    delete_upload_files,
     extract_frames,
     new_upload_prefix,
     resolve_registered,
@@ -122,3 +124,40 @@ def register_sequence(body: Register, admin: AdminUser, svc: Svc):
     if svc.users.get(owner) is None:
         raise not_found("user", owner)
     return svc.sequences.add(body.name or folder.name, "folder", str(folder), {"folder": str(folder)}, frames, owner)
+
+
+class Deleted(BaseModel):
+    id: int
+    sessions_deleted: list[str]
+    frames_deleted: int
+    cache_deleted: list[str]
+
+
+@router.delete("/sequences/{seq_id}", response_model=Deleted, responses=responses(403, 404, 409))
+def delete_sequence(seq_id: int, user: CurrentUser, svc: Svc,
+                    force: Annotated[bool, Query(description="admins only: also delete its sessions")] = False):
+    """Delete an uploaded sequence (its owner or an admin): the row, its tabs, the uploaded frames and
+    its detection-cache entries. Refused (409 `in_use`) while it has sessions, unless an admin sends
+    `force=true` (the sessions are deleted too), and while an opening of it is queued or running.
+    Registered folders are not uploads (409 `not_an_upload`): their files belong to the data root."""
+    from pipeline.session_builder import results_blobs
+
+    try:
+        seq = svc.sequences.get(seq_id, owner_filter(user))
+    except KeyError:
+        raise not_found("sequence", seq_id) from None
+    if seq["source"] != "upload":
+        raise ApiError(409, "only uploaded sequences can be deleted; a registered folder stays in the data root",
+                       code="not_an_upload")
+    if force and not user.is_admin:
+        raise ApiError(403, "only an admin can delete a sequence that still has sessions", code="forbidden")
+    try:
+        gone = svc.sequences.delete(seq_id, force)
+    except KeyError:
+        raise not_found("sequence", seq_id) from None
+    except InUse as exc:
+        what = ("sessions exist for this sequence (an admin can delete them with force=true)"
+                if exc.reason == "sessions" else "the sequence is being opened; cancel or wait for the job")
+        raise ApiError(409, what, code="in_use", details={exc.reason: exc.items}) from None
+    files = delete_upload_files(gone, LocalBlobStore(svc.settings.uploads_dir), results_blobs())
+    return {"id": seq_id, "sessions_deleted": gone["sessions"], **files}

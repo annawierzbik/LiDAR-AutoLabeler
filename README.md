@@ -125,6 +125,8 @@ Workery potrzebują tych samych zmiennych `LAL_*` co serwer.
 - Sekwencje: użytkownik wgrywa archiwum `.zip` z plikami `.bin` (limit rozmiaru, bezpieczne
   rozpakowanie), admin rejestruje folder leżący pod `LAL_DATA_ROOT` dla wybranego użytkownika
   (`docs/adr/0003-sequence-sources.md`). Wpisywanie dowolnej ścieżki zostało usunięte.
+  Wgraną sekwencję usuwa jej właściciel lub admin (`DELETE /api/v1/sequences/<id>`); gdy ma
+  sesje, tylko admin z `force=true` (sesje też są usuwane). Usuwane są klatki i wpisy cache detekcji.
 - Każdy użytkownik widzi tylko swoje sekwencje, sesje i zadania; admin widzi wszystko
   (`docs/adr/0017-ownership-tabs-and-session-locks.md`).
 - Dokumentacja API: `/api/v1/docs`; stan: `/healthz` i `/readyz`

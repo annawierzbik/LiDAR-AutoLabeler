@@ -11,7 +11,7 @@ Status: accepted (phase 4)
   stable for programs (`not_found`, `unauthorized`, `invalid_credentials`, `csrf_failed`,
   `forbidden`, `outside_data_root`, `validation_error`, `conflict`, `not_ready`, `locked`,
   `finished`, `revision_conflict`, `unknown_action`, `payload_too_large`, `gone`,
-  `internal_error`); `message` is for people; validation errors list `{field, message}` in
+  `in_use`, `not_an_upload`, `internal_error`); `message` is for people; validation errors list `{field, message}` in
   `details`. Unexpected exceptions are logged and answered 500 without internals.
 - **Pagination.** List endpoints (`/sequences`, `/jobs`, `/sessions`, `/users`) take `limit`
   (1..`LAL_PAGE_MAX`, default 50) and `offset` and answer `{"items", "total", "limit", "offset"}`,
