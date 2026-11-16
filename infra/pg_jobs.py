@@ -1,7 +1,8 @@
 """Job state in the PostgreSQL `jobs` table, shared by the API and the Celery workers (docs/adr/0015).
 
 States: queued -> running -> done | failed | cancelled; running -> cancelling -> cancelled.
-- `create` dedupes: a queued, running or done job with the same dedupe key is returned instead.
+- `create` dedupes: a queued, running, cancelling or done job with the same dedupe key is returned
+  instead; a partial unique index (migration 0005) keeps concurrent requests to one active job.
 - `start` is one conditional UPDATE (queued -> running, attempts + 1): if the broker hands the same
   job to two workers, only one runs it; the other sees no row and returns.
 - A running job writes a heartbeat; `recover_stale` turns a running job whose heartbeat is older
@@ -16,11 +17,15 @@ import time
 import uuid
 from collections.abc import Callable
 
-from sqlalchemy import and_, func, insert, or_, select, update
+from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from infra.db import JobRow
 from infra.jobs import FINAL, JobStatus
+
+# the predicate of ux_jobs_active_cache_key, as literal SQL so PostgreSQL can match the index to it
+ACTIVE = text("state IN ('queued', 'running')")
 
 
 class PgJobStore:
@@ -34,18 +39,35 @@ class PgJobStore:
 
     # --------------------------------------------------------------- API side
     def create(self, kind: str, queue: str, payload: dict, title: str, dedupe: str) -> tuple[str, bool]:
-        """(job id, True if a new job was made)."""
-        with self.engine.begin() as c:
-            old = c.execute(select(JobRow.id).where(JobRow.cache_key == dedupe,
-                                                    JobRow.state.notin_(("failed", "cancelled")))
-                            .order_by(JobRow.created_at.desc()).limit(1)).scalar()
-            if old is not None:
-                return old, False
-            job_id = uuid.uuid4().hex[:12]
-            c.execute(insert(JobRow).values(id=job_id, kind=kind, queue=queue, title=title, state="queued",
-                                            progress=0.0, message="", cache_key=dedupe, owner_id=payload.get("owner_id"),
-                                            payload={**payload, "job_id": job_id}))
-            return job_id, True
+        """(job id, True if a new job was made). A queued, running, cancelling or done job with the
+        same dedupe key is returned instead of a new one. The partial unique index
+        ux_jobs_active_cache_key (migration 0005) allows one queued or running job per key, so of
+        two concurrent requests one inserts and the other gets that job."""
+        for _ in range(3):
+            with self.engine.begin() as c:
+                old = self._existing(c, dedupe)
+                if old is not None:
+                    return old, False
+                job_id = uuid.uuid4().hex[:12]
+                made = c.execute(
+                    pg_insert(JobRow)
+                    .values(id=job_id, kind=kind, queue=queue, title=title, state="queued", progress=0.0,
+                            message="", cache_key=dedupe, owner_id=payload.get("owner_id"),
+                            payload={**payload, "job_id": job_id})
+                    .on_conflict_do_nothing(index_elements=[JobRow.cache_key], index_where=ACTIVE)
+                    .returning(JobRow.id)).scalar()
+                if made is not None:
+                    return job_id, True
+            # another request inserted the active job between our select and insert; read it in a
+            # new transaction (READ COMMITTED sees it now). If it finished as failed / cancelled
+            # meanwhile, try again.
+        raise RuntimeError(f"could not create or find a job for key {dedupe}")
+
+    @staticmethod
+    def _existing(c, dedupe: str) -> str | None:
+        return c.execute(select(JobRow.id).where(JobRow.cache_key == dedupe,
+                                                 JobRow.state.notin_(("failed", "cancelled")))
+                         .order_by(JobRow.created_at.desc()).limit(1)).scalar()
 
     VIEW = (JobRow.id, JobRow.kind, JobRow.title, JobRow.state, JobRow.progress, JobRow.message, JobRow.result,
             JobRow.attempts, JobRow.owner_id, JobRow.created_at, JobRow.finished_at)

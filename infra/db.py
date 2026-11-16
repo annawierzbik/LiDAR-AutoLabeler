@@ -27,6 +27,7 @@ from sqlalchemy import (
     create_engine,
     false,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
@@ -84,6 +85,9 @@ class JobRow(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                     onupdate=func.now())
+    # migration 0005: at most one queued or running job per dedupe key (PgJobStore.create)
+    __table_args__ = (Index("ux_jobs_active_cache_key", "cache_key", unique=True,
+                            postgresql_where=text("state IN ('queued', 'running')")),)
 
 
 class SessionRow(Base):

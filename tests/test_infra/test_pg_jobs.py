@@ -112,3 +112,78 @@ def test_celery_queue_sends_new_jobs_and_resends_lost_ones(jobs):
     clock.t += 31
     assert q.status(job).state == "queued" and sent[-1] == (job, "gpu")   # noticed on status, sent again
     assert q.cancel(job) and q.status(job).state == "cancelled"
+
+
+def test_two_concurrent_requests_get_one_job(jobs, pg_engine):
+    """Both requests look for an active job before either inserts (the race of a check-then-insert);
+    the partial unique index (migration 0005) lets one insert win and the other gets that job."""
+    import threading
+
+    from sqlalchemy import func, select
+
+    from infra.db import JobRow
+
+    store, _ = jobs
+    both_looked = threading.Barrier(2, timeout=10)
+    real = PgJobStore._existing
+    calls = []
+
+    def existing(c, dedupe):
+        found = real(c, dedupe)
+        calls.append(found)
+        if len(calls) <= 2:
+            both_looked.wait()                                       # neither has inserted yet
+        return found
+
+    results = []
+    store._existing = existing
+    threads = [threading.Thread(target=lambda: results.append(store.create("export", "cpu", {"z": 3}, "", "kc")))
+               for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    assert calls[:2] == [None, None]                                 # both saw no job: a real race
+    assert sorted(new for _, new in results) == [False, True]
+    assert results[0][0] == results[1][0]                             # the second request got the first job
+    with pg_engine.connect() as c:
+        assert c.execute(select(func.count()).select_from(JobRow).where(JobRow.cache_key == "kc")).scalar() == 1
+
+
+def test_the_database_refuses_a_second_active_job(jobs, pg_engine):
+    import sqlalchemy
+    from sqlalchemy import insert
+
+    from infra.db import JobRow
+
+    store, _ = jobs
+    a, _ = store.create("export", "cpu", {}, "", "kd")
+    with pytest.raises(sqlalchemy.exc.IntegrityError), pg_engine.begin() as c:
+        c.execute(insert(JobRow).values(id="other", kind="export", queue="cpu", state="running", cache_key="kd"))
+    store.start(a, "w")
+    store.finish(a, {})
+    with pg_engine.begin() as c:                                     # a finished job does not count
+        c.execute(insert(JobRow).values(id="later", kind="export", queue="cpu", state="queued", cache_key="kd"))
+
+
+def test_migration_0005_keeps_the_newest_of_duplicate_active_jobs(pg_url, pg_engine):
+    import datetime as dt
+
+    from sqlalchemy import insert, select
+
+    from infra.db import JobRow
+    from infra.migrate import downgrade, upgrade
+
+    downgrade(pg_url, "0004")
+    try:
+        t0 = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+        with pg_engine.begin() as c:
+            for i, state in enumerate(("queued", "running", "queued")):
+                c.execute(insert(JobRow).values(id=f"d{i}", kind="export", queue="cpu", state=state, cache_key="dup",
+                                                created_at=t0 + dt.timedelta(minutes=i)))
+    finally:
+        upgrade(pg_url)
+    with pg_engine.connect() as c:
+        rows = dict(c.execute(select(JobRow.id, JobRow.state).where(JobRow.cache_key == "dup")).all())
+        msg = c.execute(select(JobRow.message).where(JobRow.id == "d0")).scalar()
+    assert rows == {"d0": "failed", "d1": "failed", "d2": "queued"} and "superseded by job d2" in msg

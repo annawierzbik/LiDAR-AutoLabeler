@@ -33,8 +33,15 @@ Status: accepted (phase 3)
   sent again (noticed on `status` and when a worker starts), or failed after `LAL_JOB_MAX_ATTEMPTS`
   runs. Running a job twice is harmless: `PgJobStore.start` lets one claim win, and `detect_track`
   first looks in the detection cache (a finished run is never repeated).
-- **Duplicate submits** return the existing queued, running or done job with the same kind and
-  payload (`dedupe_key`; an export's payload includes the session revision).
+- **Duplicate submits** return the existing queued, running, cancelling or done job with the same
+  kind and payload (`dedupe_key`, stored in `jobs.cache_key`; an export's payload includes the
+  session revision). Since migration 0005 the database enforces it for active jobs: the partial
+  unique index `ux_jobs_active_cache_key` on `cache_key WHERE state IN ('queued', 'running')`.
+  `PgJobStore.create` inserts with `ON CONFLICT DO NOTHING` on that index, so of two concurrent
+  requests one inserts and the other reads the job it made (test:
+  `tests/test_infra/test_pg_jobs.py::test_two_concurrent_requests_get_one_job`). Migration 0005
+  marks older duplicates that already exist as failed, keeping the newest. An opening's payload
+  contains the tab id, so this does not merge two tabs' openings (ADR 0017).
 - **Storage**: tasks read point clouds and calibration through BlobStores (`infra/sequences.py`) and
   read / write the detection cache through `BlobStore` (`verification.cache.choose_blob`,
   `output_key`); the path-based helpers remain as thin adapters for `evaluation/`.
