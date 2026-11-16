@@ -104,3 +104,26 @@ def test_vendored_assets_are_served_and_pages_need_no_cdn(env):
     for page in ("home.html", "annotate.html"):
         urls = re.findall(r"https?://[^\s'\"<>)]+", (STATIC / page).read_text(encoding="utf-8"))
         assert [u for u in urls if not u.startswith("http://www.w3.org/")] == [], page
+
+
+def test_vendored_assets_are_in_git():
+    """Every asset the pages load must be tracked (a .gitignore rule once kept three.module.js out)."""
+    import re
+    import shutil
+    import subprocess
+
+    from web.server import STATIC
+
+    root = STATIC.parents[1]
+    if shutil.which("git") is None or not (root / ".git").exists():
+        pytest.skip("not a git checkout")
+    tracked = set(subprocess.run(["git", "ls-files", "web/static"], cwd=root, capture_output=True, text=True,
+                                 check=True).stdout.split())
+    used = set()
+    for page in ("home.html", "annotate.html"):
+        text = (STATIC / page).read_text(encoding="utf-8")
+        used |= {"web" + u for u in re.findall(r'"(/static/[^"]+\.(?:js|css))"', text)}
+        used |= {"web/static/vendor/three-0.160.0/examples/jsm/controls/OrbitControls.js"}
+    css = (STATIC / "vendor" / "schibsted-grotesk" / "font.css").read_text(encoding="utf-8")
+    used |= {f"web/static/vendor/schibsted-grotesk/{f}" for f in re.findall(r"url\(([^)]+\.woff2)\)", css)}
+    assert used and used <= tracked, sorted(used - tracked)
