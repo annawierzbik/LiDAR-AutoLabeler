@@ -16,7 +16,7 @@ def box(x=10.0, tid=0):
 
 
 class Builder:
-    """Stands in for scripts.verify.build_session: no detector, no data."""
+    """Stands in for pipeline.session_builder.build_session: no detector, no data."""
 
     def __init__(self, tmp_path, fail=None):
         self.tmp, self.calls, self.fail = tmp_path, [], fail

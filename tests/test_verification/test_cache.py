@@ -7,14 +7,14 @@ import pytest
 
 import detection.paths
 import evaluation.runner
-import scripts.track_sequence
-import scripts.verify
+import pipeline.detect_track
+import pipeline.session_builder
 import verification.paths
 from common.boxes import BoundingBox3D
 from detection.fov import describe
 from ingestion.folder import FolderSequence, folder_key
-from scripts.track_sequence import current_meta, save_results
-from scripts.verify import build_session
+from pipeline.detect_track import current_meta, save_results
+from pipeline.session_builder import build_session
 from verification import cache
 
 AZ = describe("azimuth")    # the mode "auto" resolves to for a folder (no calibration)
@@ -34,7 +34,7 @@ def env(tmp_path, monkeypatch):
         np.zeros((5, 4), np.float32).tofile(folder / f"{i:06d}.bin")
     results = tmp_path / "results"
     monkeypatch.setattr(verification.paths, "RESULTS_DIR", results)
-    monkeypatch.setattr(scripts.verify, "RESULTS_DIR", results)
+    monkeypatch.setattr(pipeline.session_builder, "RESULTS_DIR", results)
     tools = tmp_path / "tools"
     (tools / "cfgs" / "models").mkdir(parents=True)
     (tools / "cfgs" / "base.yaml").write_text("POINT_CLOUD_RANGE: [0, -40, -3, 70.4, 40, 1]\n")
@@ -51,7 +51,7 @@ def env(tmp_path, monkeypatch):
         calls.append(threshold)
         return [[box(100 + i, score=0.95)] for i in indices]
 
-    monkeypatch.setattr(scripts.track_sequence, "track_sequence", fake_track)
+    monkeypatch.setattr(pipeline.detect_track, "track_sequence", fake_track)
     return Namespace(folder=folder, results=results, ckpt=ckpt, cfg=cfg, base=tools / "cfgs" / "base.yaml",
                      calls=calls, key=folder_key(folder))
 

@@ -1,5 +1,5 @@
-"""Step sizes of the box edit keys, shared by the desktop window (verification/app.py) and the
-browser (web/service.py) so the two UIs cannot drift apart."""
+"""Step sizes of the box edit actions (web/service.py: forward, rotate_left, length_plus, ...),
+in one place so they are defined once."""
 import math
 
 MOVE_STEP = 0.10              # m, forward/back/left/right

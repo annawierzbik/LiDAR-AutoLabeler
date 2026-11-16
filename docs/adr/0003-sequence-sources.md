@@ -18,7 +18,7 @@ A sequence is created in one of two ways:
    resolving symlinks).
 
 The free-path folder open stays available only to the local single-process mode (`scripts.web`
-without the container settings) so the desktop and CLI workflow is unchanged.
+without the container settings) so the local and CLI workflow is unchanged.
 
 ## Consequences
 - Workers read point clouds through the BlobStore (uploads) or the mounted data root (registered).

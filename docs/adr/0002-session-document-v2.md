@@ -18,7 +18,7 @@ replica.
   `infra.blob.atomic_write_text`).
 
 ## Consequences
-- Undo works after a reload, also in the desktop app.
+- Undo works after a reload.
 - Files grow with the history: at most 50 snapshots of the changed frames (a track action snapshots
   every frame it touched).
 - Older versions of the program cannot read v2 files (they check `version == 1`).

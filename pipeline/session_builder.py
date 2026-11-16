@@ -1,13 +1,9 @@
-"""Open the verification UI for one KITTI sequence.
+"""Load (resume) or create the annotation session of a sequence: the web server's session builder.
 
-    python -m scripts.verify --sequence 0000                       # assisted: review system boxes
-    python -m scripts.verify --sequence 0000 --mode manual         # manual: draw every box yourself
-    python -m scripts.verify --folder D:\\clouds\\drive1             # any folder of KITTI-style .bin frames
-
-Boxes come from results/<seq>.json (written by scripts.track_sequence). If it does not exist,
-detection + tracking run first. Progress is autosaved to
-results/sessions/<seq>_<mode>.json and resumed automatically
-(use --fresh to start over).
+A KITTI sequence (--data-root/--split/--sequence) or any folder of .bin frames (--folder).
+Boxes come from the detection + tracking cache in results/ (pipeline.detect_track); when there is
+no usable cache, detection + tracking run first. Sessions live in results/sessions/ and are resumed
+automatically (fresh=True starts over). In manual mode no detector runs.
 """
 from __future__ import annotations
 
@@ -31,7 +27,6 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--stop", type=int, default=None, help="exclusive; default = whole sequence")
     p.add_argument("--threshold", type=float, default=0.5)
-    p.add_argument("--fps", type=float, default=10.0)
     p.add_argument("--fresh", action="store_true", help="ignore a saved session and start over")
     p.add_argument("--use-cache-without-weights", action="store_true",
                    help="use matching cached detections even though the checkpoint is missing on disk")
@@ -67,7 +62,7 @@ def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool
     results/<name>_f<start>-<stop>.json (partial runs), each optionally with a _c<key> suffix
     (verification/cache.py: files with other settings are not reused, files without settings are,
     with a warning), then at the same names with `legacy_name`."""
-    from scripts.track_sequence import parse_results
+    from pipeline.detect_track import parse_results
 
     candidates = _cache_candidates(name) + (_cache_candidates(legacy_name) if legacy_name else [])
     found = cache.choose(candidates, meta,
@@ -112,7 +107,7 @@ def build_session(args):
     if args.mode == "manual":
         indices, results = want, [[] for _ in want]
     else:
-        from scripts.track_sequence import current_meta
+        from pipeline.detect_track import current_meta
 
         split = None if args.folder else args.split
         meta = current_meta(args.threshold, sequence_mode(seq, args.fov), split)
@@ -120,7 +115,7 @@ def build_session(args):
         if found is not None:
             indices, results = found
         else:
-            from scripts.track_sequence import save_results, track_sequence
+            from pipeline.detect_track import save_results, track_sequence
 
             indices = want
             print(f"Detecting + tracking frames {indices.start}..{indices.stop - 1}")
@@ -132,22 +127,3 @@ def build_session(args):
         label, results, args.mode, frame_offset=indices.start)
     print(f"New {args.mode} session with {session.stats()['total']} system boxes in {len(indices)} frames")
     return session, seq, session_path
-
-
-def main() -> None:
-    p = argparse.ArgumentParser()
-    add_arguments(p)
-    args = p.parse_args()
-    session, seq, session_path = build_session(args)
-
-    from verification.app import VerificationApp  # imports open3d GUI only when needed
-
-    VerificationApp(session, seq, session_path, fps=args.fps).run()
-
-    st = session.stats()
-    print(f"\nSession closed. Boxes: {st}")
-    print(f"Active time: {session.active_seconds() / 60:.1f} min   saved to {session_path}")
-
-
-if __name__ == "__main__":
-    main()

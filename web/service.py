@@ -3,7 +3,7 @@
 Stateless actions (docs/adr/0001-explicit-target-actions.md): every action names its target
 (frame, and box index or track id where needed). The view state (current frame, selected box,
 class for new boxes, whether rejected boxes are shown) lives in the browser; nothing here depends
-on a server-side current frame or selection. The desktop window keeps using ReviewController.
+on a server-side current frame or selection.
 
 `ReviewService` exposes the annotations of a frame as plain JSON-able dicts, the point cloud of a
 frame as raw float32 bytes, `next_pending(frame)`, and `act(name, frame, ...)` which performs one
@@ -21,7 +21,7 @@ from infra.points import PointSource
 from infra.sessions import RevisionConflict, SessionStore
 from infra.settings import get_settings
 from verification.controller import CLASSES, ReviewController
-from verification.edit_steps import (  # same steps as the desktop UI
+from verification.edit_steps import (
     MOVE_STEP,
     ROT_STEP,
     SIZE_STEP,
@@ -171,7 +171,7 @@ class ReviewService:
         return index
 
     def _at(self, frame: int, index: int | None = None) -> ReviewController:
-        """A controller pointed at `frame` / `index`, to reuse the desktop's editing rules."""
+        """A controller pointed at `frame` / `index`, to reuse its editing rules."""
         c = ReviewController(self.session)
         c.frame, c.selected = frame, index
         return c

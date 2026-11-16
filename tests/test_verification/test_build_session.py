@@ -3,12 +3,12 @@ from argparse import Namespace
 import numpy as np
 import pytest
 
-import scripts.verify
+import pipeline.session_builder
 import verification.paths
 from common.boxes import BoundingBox3D
 from ingestion.folder import folder_key
-from scripts.track_sequence import save_results
-from scripts.verify import build_session
+from pipeline.detect_track import save_results
+from pipeline.session_builder import build_session
 
 
 def box(x, tid):
@@ -24,7 +24,7 @@ def clouds(tmp_path, monkeypatch):
         np.zeros((5, 4), np.float32).tofile(folder / f"{i:06d}.bin")
     results = tmp_path / "results"
     monkeypatch.setattr(verification.paths, "RESULTS_DIR", results)
-    monkeypatch.setattr(scripts.verify, "RESULTS_DIR", results)
+    monkeypatch.setattr(pipeline.session_builder, "RESULTS_DIR", results)
     return folder
 
 

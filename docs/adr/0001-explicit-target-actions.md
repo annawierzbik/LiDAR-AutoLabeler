@@ -21,8 +21,9 @@ not run as several stateless replicas (phase 4).
   annotation time keeps recording human navigation; playback does not log (as before).
 - Responses are the state of the frame the action concerns plus `result` (e.g. `{frame, index}`
   of a new or copied box, `{count}` of a track action).
-- The desktop window keeps `ReviewController` unchanged; the web service reuses its editing
-  rules (nudge, resize, add, copy) by pointing a throw-away controller at the named box.
+- The web service reuses `ReviewController`'s editing rules (nudge, resize, add, copy) by
+  pointing a throw-away controller at the named box. (The desktop window that used the controller's
+  cursor was removed later, ADR 0009.)
 
 ## Consequences
 - The action API changed shape (no `select`, `goto`, `next`, `prev`, `select_next`,

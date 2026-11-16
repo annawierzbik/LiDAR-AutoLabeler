@@ -6,12 +6,12 @@ from argparse import Namespace
 import numpy as np
 import pytest
 
-import scripts.track_sequence
-import scripts.verify
+import pipeline.detect_track
+import pipeline.session_builder
 import verification.paths
 from common.boxes import BoundingBox3D
-from scripts.track_sequence import save_results
-from scripts.verify import build_session, file_names
+from pipeline.detect_track import save_results
+from pipeline.session_builder import build_session, file_names
 from verification import cache
 from verification.session import AnnotationSession
 
@@ -31,10 +31,10 @@ def kitti(tmp_path, monkeypatch):
             np.zeros((5, 4), np.float32).tofile(vel / f"{i:06d}.bin")
     results = tmp_path / "results"
     monkeypatch.setattr(verification.paths, "RESULTS_DIR", results)
-    monkeypatch.setattr(scripts.verify, "RESULTS_DIR", results)
+    monkeypatch.setattr(pipeline.session_builder, "RESULTS_DIR", results)
     monkeypatch.setattr(cache, "_warned", set())
     calls = []
-    monkeypatch.setattr(scripts.track_sequence, "track_sequence",
+    monkeypatch.setattr(pipeline.detect_track, "track_sequence",
                         lambda seq, idx, th, fov="auto": calls.append(seq.split) or [[box(50 + i)] for i in idx])
     return Namespace(root=root, results=results, calls=calls)
 

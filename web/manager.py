@@ -56,13 +56,13 @@ class Job:
 
 
 def default_builder(args):
-    from scripts.verify import build_session
+    from pipeline.session_builder import build_session
     return build_session(args)
 
 
 def make_args(**overrides) -> argparse.Namespace:
-    """Arguments of scripts.verify with their defaults, plus `overrides`."""
-    from scripts.verify import add_arguments
+    """Arguments of pipeline.session_builder with their defaults, plus `overrides`."""
+    from pipeline.session_builder import add_arguments
     parser = argparse.ArgumentParser()
     add_arguments(parser)
     args = parser.parse_args([])
@@ -74,7 +74,7 @@ def make_args(**overrides) -> argparse.Namespace:
 class SessionManager:
     def __init__(self, builder: Callable | None = None, background: bool = True,
                  queue: JobQueue | None = None, store: SessionStore | None = None) -> None:
-        """`builder(args)` -> (session, sequence, session file path) as scripts.verify.build_session;
+        """`builder(args)` -> (session, sequence, session file path) as pipeline.session_builder.build_session;
         the session file must lie in the store's folder. `background=False` runs jobs inline (tests)."""
         self.builder = builder or default_builder
         self.queue = queue or ThreadJobQueue(background=background)

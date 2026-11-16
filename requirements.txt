@@ -6,8 +6,7 @@ torch==2.6.0+cu124
 torchvision==0.21.0+cu124
 spconv-cu120==2.3.6
 
-# --- Data / visualization ---
-open3d
+# --- Data ---
 scipy
 
 # --- Web interface (scripts.web) ---

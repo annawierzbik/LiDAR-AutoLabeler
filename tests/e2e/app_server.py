@@ -2,8 +2,8 @@
 
     LAL_RESULTS_DIR=<tmp> python -m tests.e2e.app_server <port>
 
-Everything is the production code path (scripts.verify.build_session, session files, cache files,
-SessionManager, FastAPI app) except detection + tracking: `scripts.track_sequence.track_sequence`
+Everything is the production code path (pipeline.session_builder.build_session, session files, cache files,
+SessionManager, FastAPI app) except detection + tracking: `pipeline.detect_track.track_sequence`
 is replaced by FAKE_TRACKS, so no GPU, model or KITTI data is needed.
 
 Fake tracks per frame i: track 0, a Car at x = 10 + i in every frame; track 1, a Pedestrian at
@@ -15,7 +15,7 @@ import sys
 
 import uvicorn
 
-import scripts.track_sequence
+import pipeline.detect_track
 from common.boxes import BoundingBox3D
 
 
@@ -30,7 +30,7 @@ def fake_track(seq, indices, threshold, fov="auto"):
 
 
 def main() -> None:
-    scripts.track_sequence.track_sequence = fake_track
+    pipeline.detect_track.track_sequence = fake_track
 
     from web.manager import SessionManager
     from web.server import create_app

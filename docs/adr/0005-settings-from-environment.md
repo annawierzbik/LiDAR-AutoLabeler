@@ -13,5 +13,5 @@ the prefix `LAL_`. Defaults reproduce the behaviour before settings existed:
 | `LAL_POINT_CACHE_FRAMES` | `8` | point clouds kept per open session |
 | `LAL_SESSION_STORE`, `LAL_BLOB_STORE`, `LAL_JOB_QUEUE` | `file`, `local`, `thread` | only value allowed so far; later phases add backends |
 
-Sessions always live in `<results>/sessions`: a separate sessions setting could make the desktop
-(`verification.paths.session_file`) and the web store disagree.
+Sessions always live in `<results>/sessions`: a separate sessions setting could make the session
+builder (`verification.paths.session_file`) and the web store disagree.

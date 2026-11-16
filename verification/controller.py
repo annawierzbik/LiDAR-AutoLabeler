@@ -1,8 +1,9 @@
-"""What the verification UI *does*, independent of how it is drawn.
+"""Editing rules of the verification UI, independent of how it is drawn.
 
-The GUI only translates clicks and key presses into calls on this class and then draws
-`controller.visible()`. Everything that decides behaviour (selection, auto-advance after
-accept/reject, nudging, adding boxes, ...) lives here so it can be unit tested without a window.
+How a box is nudged, resized, added on the ground or copied to the next frame lives here; the web
+service (web/service.py) points a controller at the box an action names and reuses these rules.
+The cursor part (current frame, selection, auto-advance after accept/reject) was used by the
+desktop window, which was removed (docs/adr/0009); the browser keeps that view state itself.
 """
 from __future__ import annotations
 
@@ -109,7 +110,7 @@ class ReviewController:
     # ------------------------------------------------------------------- review
     def accept(self) -> bool:
         """Accept the selected box. With nothing selected, only select the first box of this frame
-        that needs a decision (same in the desktop window and the browser). True if a box was accepted."""
+        that needs a decision (the browser does the same on its side). True if a box was accepted."""
         if self.selected is None:
             self.select_next_pending()
             return False

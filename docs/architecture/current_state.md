@@ -1,5 +1,8 @@
 # Current state (before the multi-service migration)
 
+> Historical snapshot of 2026-11-16. Later changes: phase 1 (ADRs 0001-0008) and the removal of the
+> desktop application (ADR 0009); the Open3D windows described below no longer exist.
+
 Snapshot of `web/`, `verification/`, `export/` and `scripts/` as of commit `ab07700` plus the
 uncommitted working tree of 2026-11-16 (cache metadata, FOV crop, shared edit steps, second-tab
 refusal). Read-only report: no code was changed for it. Line numbers refer to that working tree.

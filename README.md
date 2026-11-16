@@ -26,7 +26,7 @@ Data Ingestion → Detection → Tracking & Association → Annotation Verificat
 | Data Ingestion | `ingestion/` | Wczytywanie surowych chmur punktów, kalibracji i timestampów KITTI |
 | Detection | `detection/` | Detekcja obiektów 3D (PointPillars, OpenPCDet), fine-tuning na KITTI |
 | Tracking & Association | `tracking/` | Filtr Kalmana + metoda węgierska (tracking-by-detection) |
-| Annotation Verification | `verification/` | Interfejs weryfikacji adnotacji (Open3D) + tryb demo real-time |
+| Annotation Verification | `verification/`, `web/` | Sesja weryfikacji (decyzje, edycja, cofanie, interpolacja) i interfejs w przeglądarce |
 | Prediction Export | `export/` | Eksport etykiet do formatu KITTI |
 
 ## Struktura repozytorium
@@ -36,7 +36,10 @@ lidar-auto-annotation/
 ├── ingestion/          # Data Ingestion Module
 ├── detection/           # Detection Module (PointPillars + fine-tuning)
 ├── tracking/             # Tracking & Association Module (Kalman + Hungarian)
-├── verification/         # Annotation Verification Module (Open3D UI + demo playback)
+├── verification/         # Annotation Verification Module (sesja, reguły edycji, cache)
+├── web/                  # Interfejs w przeglądarce (FastAPI + three.js)
+├── pipeline/             # Detekcja + tracking sekwencji, budowanie sesji
+├── infra/                # Magazyn sesji i plików, kolejka zadań, ustawienia (LAL_*)
 ├── export/               # Prediction Export Module (format KITTI)
 ├── configs/              # Pliki konfiguracyjne (ścieżki, hiperparametry, progi)
 ├── scripts/              # Skrypty uruchomieniowe (np. run_pipeline.py)
@@ -55,6 +58,17 @@ pip install -r requirements.txt
 ```
 
 OpenPCDet wymaga dodatkowej, osobnej instalacji (kompilacja rozszerzeń CUDA) — patrz [instrukcja OpenPCDet](https://github.com/open-mmlab/OpenPCDet/blob/master/docs/INSTALL.md). Wymagany jest GPU z obsługą CUDA do treningu/fine-tuningu; sam pipeline (bez treningu) może działać na CPU, ale znacznie wolniej.
+
+## Uruchomienie
+
+```bash
+python -m scripts.web                        # interfejs w przeglądarce: http://127.0.0.1:8000
+python -m scripts.track_sequence --sequence 0000   # detekcja + tracking sekwencji KITTI do pliku cache
+python -m scripts.export_labels --session results/sessions/<plik>.json --folder <folder z .bin>
+```
+
+Aplikacja desktopowa (okno Open3D) została usunięta; jedynym interfejsem jest przeglądarka
+(`docs/adr/0009-remove-desktop-application.md`).
 
 ## Dane
 
