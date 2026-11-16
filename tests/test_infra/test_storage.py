@@ -1,14 +1,12 @@
-"""infra/: blob store, session store, job queue, settings, point source."""
+"""infra/: blob store, session store, settings, point source."""
 import json
 import os
-import threading
 
 import numpy as np
 import pytest
 
 from common.boxes import BoundingBox3D
 from infra.blob import BlobStore, LocalBlobStore, atomic_write_bytes
-from infra.jobs import JobQueue, ThreadJobQueue
 from infra.points import BlobPointSource, point_source
 from infra.sessions import (
     FileSessionStore,
@@ -85,46 +83,6 @@ def test_store_keys_are_plain_names(store, tmp_path):
     assert store.key_for(tmp_path / "abc.json") == "abc"
     with pytest.raises(ValueError):
         store.key_for(tmp_path / "sub" / "abc.json")
-
-
-# ------------------------------------------------------------------- jobs
-def test_thread_queue_runs_and_reports():
-    q = ThreadJobQueue(background=False)
-    assert isinstance(q, JobQueue)
-    ok = q.submit(lambda: 42, "answer")
-    assert q.status(ok).state == "done" and q.status(ok).result == 42
-    bad = q.submit(lambda: 1 / 0, "broken", job_id="x1")
-    assert bad == "x1" and q.status(bad).state == "failed" and "division" in q.status(bad).message
-    with pytest.raises(ValueError):
-        q.submit(lambda: 0, job_id="x1")
-    with pytest.raises(KeyError):
-        q.status("nope")
-
-
-def test_cancel_before_start_and_not_while_running():
-    q = ThreadJobQueue(background=True)
-    started, release = threading.Event(), threading.Event()
-
-    def slow():
-        started.set()
-        release.wait(5)
-        return "done"
-
-    running = q.submit(slow)
-    started.wait(5)
-    assert q.cancel(running) is False                                # a running thread cannot be stopped
-    release.set()
-
-    class Held(ThreadJobQueue):                                      # jobs wait until released
-        def _start(self, job_id, fn):
-            self.waiting = (job_id, fn)
-
-    q2 = Held()
-    jid = q2.submit(lambda: 1)
-    assert q2.status(jid).state == "queued"
-    assert q2.cancel(jid) is True and q2.status(jid).state == "cancelled"
-    q2._run(*q2.waiting)
-    assert q2.status(jid).state == "cancelled" and q2.status(jid).result is None   # it is not run afterwards
 
 
 # --------------------------------------------------------------- settings

@@ -62,7 +62,28 @@ OpenPCDet wymaga dodatkowej, osobnej instalacji (kompilacja rozszerzeń CUDA) �
 
 ## Uruchomienie
 
-Narzędzia wiersza poleceń działają bez bazy i kolejki:
+### Co jest potrzebne do czego
+
+**Aplikacja WWW** (API i strony) wymaga zawsze: PostgreSQL (użytkownicy, sekwencje, karty, sesje,
+zadania), Redisa (broker kolejki), co najmniej jednego workera kolejki `gpu` (otwieranie sesji z
+detekcją) i jednego workera kolejki `cpu` (sesje ręczne, eksport) oraz ustawień
+`LAL_SESSION_STORE=postgres`, `LAL_JOB_QUEUE=celery` i `LAL_JWT_SECRET`. Bez nich serwer nie
+startuje.
+
+**Skrypty działające tylko na plikach lokalnych** (bez bazy, Redisa i workerów):
+
+| skrypt | co robi |
+|---|---|
+| `scripts.detect_frame` | detekcja na jednej klatce KITTI |
+| `scripts.track_sequence` | detekcja + tracking sekwencji KITTI do pliku cache w `results/` |
+| `scripts.evaluate_sequence`, `scripts.evaluate_all` | ewaluacja względem ground truth |
+| `scripts.export_labels` | eksport etykiet z **pliku** sesji JSON (sesje z bazy eksportuje się w przeglądarce) |
+| `scripts.verify_dataset` | sprawdzenie struktury danych KITTI |
+
+**Skrypty wymagające PostgreSQL:** `scripts.create_user`, `scripts.import_sessions` (czyta pliki
+sesji, zapisuje do bazy), `scripts.bench_session_store` (porównuje magazyn plikowy z bazą).
+`FileSessionStore` (sesje jako pliki JSON) jest używany już tylko przez `scripts.bench_session_store`
+i testy jednostkowe.
 
 ```bash
 python -m scripts.track_sequence --sequence 0000   # detekcja + tracking sekwencji KITTI do pliku cache

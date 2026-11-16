@@ -26,8 +26,9 @@ arguments that open it). It is created in one of two ways:
 
 **The web API always runs with PostgreSQL, Redis and at least one worker of each queue** (decision
 of phase 4). The free-path folder open is removed from the web UI entirely, also locally: local
-folders are registered by an admin below `LAL_DATA_ROOT`. `FileSessionStore` and
-`ThreadTaskQueue` remain for the CLI scripts and the tests.
+folders are registered by an admin below `LAL_DATA_ROOT`. `FileSessionStore` remains for
+`scripts/bench_session_store.py` and the unit tests, `ThreadTaskQueue` for the tests; the
+file-only CLI scripts (detection, tracking, evaluation, export of a session file) use neither.
 
 ## Consequences
 - The uploads BlobStore is a `LocalBlobStore` on `LAL_UPLOAD_ROOT` (default

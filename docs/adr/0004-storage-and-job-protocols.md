@@ -1,7 +1,8 @@
 # 0004 Storage and job protocols with local implementations
 
 Status: accepted (phase 1). `SessionManager` was removed in phase 4 (ADR 0017); the lock owner
-is now `u<user id>/<client id>`.
+is now `u<user id>/<client id>`. `JobQueue` / `ThreadJobQueue` were removed after phase 4
+(unused since openings became tasks); the task queues of ADR 0015 replace them.
 
 ## Decision
 `infra/` defines typing protocols and local implementations that reproduce the single-process

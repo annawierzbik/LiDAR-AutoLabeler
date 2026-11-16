@@ -1,12 +1,8 @@
 """Background jobs.
 
-JobQueue / ThreadJobQueue: submit a function, poll its status, cancel it. Cancelling only works
-before a job has started. (The web manager used it for openings until phase 4; since then an
-opening is a task, ADR 0017, and nothing in the application uses JobQueue.)
-
 TaskQueue: submit a named task (infra.tasks.TASKS) with a JSON payload; status with progress;
-cooperative cancel. ThreadTaskQueue (the default, LAL_JOB_QUEUE=thread; CLI and tests) runs tasks
-in threads of this process; CeleryTaskQueue (infra/celery_queue.py) sends them to worker processes
+cooperative cancel. ThreadTaskQueue (the default, LAL_JOB_QUEUE=thread; used by the tests, no script uses a
+queue) runs tasks in threads of this process; CeleryTaskQueue (infra/celery_queue.py) sends them to worker processes
 (always used by the web API, ADR 0003).
 """
 from __future__ import annotations
@@ -14,7 +10,6 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -35,63 +30,6 @@ class JobStatus:
     kind: str = ""
     progress: float = 0.0
     attempts: int = 0
-
-
-@runtime_checkable
-class JobQueue(Protocol):
-    def submit(self, fn: Callable[[], Any], title: str = "", job_id: str | None = None) -> str:
-        """Start `fn` in the background; returns the job id (`job_id` if given)."""
-
-    def status(self, job_id: str) -> JobStatus:
-        """KeyError for unknown ids."""
-
-    def cancel(self, job_id: str) -> bool:
-        """True if the job will not run (or already did not); False if it is running or finished."""
-
-
-class ThreadJobQueue:
-    def __init__(self, background: bool = True) -> None:
-        self.background = background
-        self._jobs: dict[str, JobStatus] = {}
-        self._mutex = threading.Lock()
-
-    def submit(self, fn: Callable[[], Any], title: str = "", job_id: str | None = None) -> str:
-        job_id = job_id or uuid.uuid4().hex[:8]
-        with self._mutex:
-            if job_id in self._jobs:
-                raise ValueError(f"job id {job_id} already used")
-            self._jobs[job_id] = JobStatus(job_id, title)
-        self._start(job_id, fn)
-        return job_id
-
-    def _start(self, job_id: str, fn: Callable[[], Any]) -> None:
-        if self.background:
-            threading.Thread(target=self._run, args=(job_id, fn), daemon=True).start()
-        else:
-            self._run(job_id, fn)
-
-    def _run(self, job_id: str, fn: Callable[[], Any]) -> None:
-        job = self._jobs[job_id]
-        with self._mutex:
-            if job.state == "cancelled":
-                return
-            job.state = "running"
-        try:
-            job.result = fn()
-            job.state = "done"
-        except Exception as exc:
-            job.error, job.message, job.state = exc, str(exc), "failed"
-            log.exception("Job %s (%s) failed", job_id, job.title)
-
-    def status(self, job_id: str) -> JobStatus:
-        return self._jobs[job_id]
-
-    def cancel(self, job_id: str) -> bool:
-        with self._mutex:
-            job = self._jobs[job_id]
-            if job.state == "queued":
-                job.state = "cancelled"
-            return job.state == "cancelled"
 
 
 # ------------------------------------------------------------------- task queues
