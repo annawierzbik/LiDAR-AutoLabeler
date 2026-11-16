@@ -26,9 +26,12 @@ NETWORK_WARNING = (
 
 
 def main() -> None:
+    from infra.settings import get_settings
+
+    settings = get_settings()
     p = argparse.ArgumentParser()
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--host", default=settings.host, help="default: LAL_HOST or 127.0.0.1")
+    p.add_argument("--port", type=int, default=settings.port, help="default: LAL_PORT or 8000")
     p.add_argument("--no-browser", action="store_true")
     args = p.parse_args()
 

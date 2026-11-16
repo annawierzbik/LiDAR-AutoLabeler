@@ -13,6 +13,7 @@ scipy
 # --- Web interface (scripts.web) ---
 fastapi==0.161.1
 uvicorn==0.54.0
+pydantic-settings==2.16.3  # infra/settings.py (LAL_* environment variables)
 
 # --- OpenPCDet dependencies (SharedArray intentionally left out) ---
 llvmlite

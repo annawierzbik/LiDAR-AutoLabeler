@@ -74,8 +74,10 @@ def test_describe_and_sequence_mode():
     assert sequence_mode(Seq([frame]), "auto", 41.5) == "azimuth:41.5"
 
 
-@pytest.mark.skipif(not (KITTI / "image_2" / "000010.png").exists(), reason="KITTI object data not available")
+@pytest.mark.gpu   # needs torch, OpenPCDet and the KITTI object data (deselected by default)
 def test_camera_mask_matches_openpcdet_get_fov_flag():
+    if not (KITTI / "image_2" / "000010.png").exists():
+        pytest.skip("KITTI object data not available")
     pytest.importorskip("torch")
     import torch  # noqa: F401  (before pcdet)
     from pcdet.datasets.kitti.kitti_dataset import KittiDataset

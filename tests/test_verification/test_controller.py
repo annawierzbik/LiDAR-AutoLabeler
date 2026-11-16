@@ -79,13 +79,18 @@ def test_accept_or_reject_with_nothing_selected_only_selects_the_first_pending_b
     assert getattr(c, action)() is True                         # the second press decides
 
 
-def test_browser_accept_with_nothing_selected_behaves_like_the_desktop(c):
+def test_browser_accept_needs_an_explicit_box(c, tmp_path):
+    """The browser keeps the selection (docs/adr/0001); with nothing selected it selects the first
+    box to review itself (annotate.html, decide()). The server only accepts named boxes."""
+    from infra.points import LoaderPointSource
+    from infra.sessions import FileSessionStore
     from tests.test_web.test_service import FakeLoader
     from web.service import ReviewService
 
-    svc = ReviewService(c.session, FakeLoader())
-    st = svc.act("accept")
-    assert st["selected"] == 0 and st["stats"]["reviewed"] == 0
+    svc = ReviewService(c.session, FileSessionStore(tmp_path), "s", LoaderPointSource(FakeLoader()))
+    with pytest.raises(ValueError, match="index"):
+        svc.act("accept", frame=0)
+    assert svc.act("accept", frame=0, index=0)["stats"]["reviewed"] == 1
 
 
 def test_accept_track_whole_and_from_here(c):

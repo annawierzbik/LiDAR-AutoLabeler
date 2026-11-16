@@ -281,7 +281,10 @@ const grid = new THREE.GridHelper(80, 16, 0x26303a, 0x171d24);
 grid.rotateX(Math.PI / 2); grid.position.set(20, 0, -1.73);   // road level in KITTI
 scene.add(grid);
 
+// `state` = what the server returned for the shown frame (all its boxes, rejected ones included).
+// `ui` = everything about what the user looks at; it lives only here (docs/adr/0001).
 let state = null, cloud = null, boxGroup = new THREE.Group(), pickables = [];
+const ui = { frame: 0, selected: null, cls: 'Car', showRejected: false };
 scene.add(boxGroup);
 let pointsToken = 0, playing = false, timer = null, pointSize = +store.get('pointSize', '0.06'), labelsOn = store.get('labels', '1') === '1';
 let tags = [];
@@ -318,10 +321,95 @@ async function api(path, body) {
   if (!r.ok) throw new Error(await r.text());
   return r;
 }
+// a server action on the shown frame; returns the new state (already shown) or null on error
 async function act(name, extra = {}) {
-  try { applyState(await (await api(API + '/action', { name, ...extra })).json()); }
-  catch (e) { toast('Error: ' + e.message); }
+  try {
+    const s = await (await api(API + '/action', { name, frame: ui.frame, ...extra })).json();
+    applyState(s);
+    return s;
+  } catch (e) { toast('Error: ' + e.message); return null; }
 }
+// show another frame; `log` records the frame change in the session's event log (not for playback)
+async function show(frame, log = true) {
+  if (!state || frame < 0 || frame >= state.num_frames || frame === ui.frame) return;
+  try {
+    const s = log ? await (await api(API + '/action', { name: 'view', frame })).json()
+                  : await (await api(`${API}/state?frame=${frame}`)).json();
+    ui.selected = null;
+    applyState(s);
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+// ------------------------------------------------------------------ selection
+const NEEDS_REVIEW = ['pending', 'interpolated'];
+const visibleBoxes = () => state ? state.annotations.filter(a => ui.showRejected || a.status !== 'rejected') : [];
+const selectedBox = () => state && ui.selected !== null ? state.annotations[ui.selected] || null : null;
+function nextToReview(start) {          // first box after `start` (wrapping) that still needs a decision
+  const anns = state.annotations, n = anns.length;
+  for (let step = 1; step <= n; step++) { const i = (start + step) % n; if (NEEDS_REVIEW.includes(anns[i].status)) return i; }
+  return null;
+}
+function clampSelection() {
+  const n = state.annotations.length;
+  if (ui.selected !== null && ui.selected >= n) ui.selected = n ? n - 1 : null;
+  const sel = selectedBox();
+  if (sel && sel.status === 'rejected' && !ui.showRejected) ui.selected = null;
+}
+function select(i) { ui.selected = i; render(); }
+function selectStep(step) {
+  const idx = visibleBoxes().map(a => a.i);
+  if (!idx.length) return select(null);
+  const k = idx.indexOf(ui.selected);
+  select(k < 0 ? (step > 0 ? idx[0] : idx[idx.length - 1]) : idx[(k + step + idx.length) % idx.length]);
+}
+function needSelection() { if (selectedBox()) return true; toast('Select a box first (click it or press Tab).'); return false; }
+
+// accept / reject: with nothing selected the first box to review is selected (as in the desktop
+// window); after a decision the selection moves on to the next box that still needs one
+async function decide(name) {
+  if (!selectedBox()) { const i = nextToReview(-1); if (i !== null) select(i); return; }
+  const s = await act(name, { index: ui.selected });
+  if (!s) return;
+  clampSelection();
+  const next = ui.selected === null ? nextToReview(-1) : nextToReview(ui.selected);
+  if (next !== null) ui.selected = next;
+  render();
+}
+async function trackAction(name) {
+  const sel = selectedBox();
+  if (!needSelection()) return;
+  if (sel.track_id == null) return toast('This box belongs to no track.');
+  await act(name, { track_id: sel.track_id });
+}
+async function boxAction(name) { if (needSelection()) await act(name, { index: ui.selected }); }
+async function addBox() {
+  const s = await act('add', { label: ui.cls });
+  if (s) select(s.result.index);
+}
+async function copyNext() {
+  if (!needSelection()) return;
+  const s = await act('copy_next', { index: ui.selected });
+  if (!s) return;
+  if (s.result.copied === false) return toast('Cannot copy: last frame, or the track already has a box there.');
+  select(s.result.index);
+}
+async function undoRedo(name) { if (await act(name)) { clampSelection(); render(); } }
+async function nextPending() {
+  try {
+    const r = await (await api(`${API}/next_pending?frame=${ui.frame}`)).json();
+    if (r.frame === null) toast('No boxes left to review.'); else await show(r.frame);
+  } catch (e) { toast('Error: ' + e.message); }
+}
+function toggleRejected(on) { ui.showRejected = on; clampSelection(); render(); }
+
+const ACTIONS = {
+  next: () => show(ui.frame + 1), prev: () => show(ui.frame - 1), next_pending: nextPending,
+  select_next: () => selectStep(1), select_prev: () => selectStep(-1),
+  accept: () => decide('accept'), reject: () => decide('reject'),
+  accept_track: () => trackAction('accept_track'), reject_track: () => trackAction('reject_track'),
+  undo: () => undoRedo('undo'), redo: () => undoRedo('redo'), add: addBox, copy_next: copyNext,
+};
+const run = name => (ACTIONS[name] || (() => boxAction(name)))();   // the rest: move / rotate / resize the selected box
 
 // ------------------------------------------------------------------ point cloud
 async function loadPoints(frame) {
@@ -341,7 +429,7 @@ async function loadPoints(frame) {
   cloud = new THREE.Points(g, new THREE.PointsMaterial({ size: pointSize, vertexColors: true, sizeAttenuation: true }));
   cloud.frustumCulled = false;
   scene.add(cloud);
-  if (state && state.frame + 1 < state.num_frames) fetch(API + '/points/' + (state.frame + 1)).catch(() => {});  // warm the cache
+  if (state && frame + 1 < state.num_frames) fetch(API + '/points/' + (frame + 1)).catch(() => {});  // warm the cache
 }
 
 // ---------------------------------------------------------------------- boxes
@@ -353,8 +441,8 @@ const frontCross = new THREE.BufferGeometry().setAttribute('position', new THREE
 function drawBoxes() {
   for (const ch of [...boxGroup.children]) { boxGroup.remove(ch); ch.traverse(o => o.material && o.material.dispose && o.material.dispose()); }
   pickables = []; tags = []; $('labels').replaceChildren();
-  for (const a of state.annotations) {
-    const sel = a.i === state.selected;
+  for (const a of visibleBoxes()) {
+    const sel = a.i === ui.selected;
     const color = sel ? SELECTED : COLORS[a.status];
     const g = new THREE.Group();
     g.position.set(a.x, a.y, a.z); g.rotation.z = a.heading; g.scale.set(a.dx, a.dy, a.dz);
@@ -381,13 +469,13 @@ renderer.domElement.addEventListener('pointerup', e => {
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects(pickables, false)[0];
-  act('select', { index: hit ? hit.object.userData.index : null });
+  select(hit ? hit.object.userData.index : null);
 });
 
 // ----------------------------------------------------------------- view tools
 function topView() { const t = controls.target; setView([t.x - 0.5, t.y, 55], [t.x, t.y, 0]); }
 function focusSelected() {
-  const a = state && state.annotations.find(x => x.i === state.selected);
+  const a = selectedBox();
   if (!a) return toast('Select a box first (click it or press Tab).');
   const off = camera.position.clone().sub(controls.target).setLength(18);
   controls.target.set(a.x, a.y, a.z); camera.position.copy(controls.target).add(off); controls.update();
@@ -430,7 +518,7 @@ async function scrubTo(f) {
   scrubTarget = f;
   if (scrubbing) return;                               // the running loop will pick up the newest target
   scrubbing = true;
-  while (scrubTarget !== null) { const t = scrubTarget; scrubTarget = null; if (t !== state.frame) await act('goto', { frame: t }); }
+  while (scrubTarget !== null) { const t = scrubTarget; scrubTarget = null; if (t !== ui.frame) await show(t); }
   scrubbing = false;
 }
 strip.addEventListener('pointerdown', e => { if (!state || e.button !== 0) return; dragging = true; strip.setPointerCapture(e.pointerId); scrubTo(frameAt(e)); });
@@ -450,7 +538,14 @@ const STATUS_ORDER = ['pending', 'interpolated', 'accepted', 'edited', 'manual',
 function applyState(s) {
   const frameChanged = !state || s.frame !== state.frame;
   state = s;
-  const st = s.stats;
+  ui.frame = s.frame;
+  clampSelection();
+  render();
+  if (frameChanged) loadPoints(s.frame).catch(e => toast('Could not load points: ' + e.message));
+}
+
+function render() {
+  const s = state, st = s.stats, shown = visibleBoxes();
   $('seq').textContent = s.sequence;
   $('sub').textContent = `Frame ${s.frame + 1} of ${s.num_frames}, ${s.mode} mode`;
   $('progress').textContent = `Reviewed ${st.reviewed} of ${st.total} boxes (${Math.round(st.reviewed_fraction * 100)}%)`;
@@ -471,9 +566,9 @@ function applyState(s) {
 
   const cls = $('cls');
   if (!cls.options.length) for (const c of s.classes) cls.add(new Option(c, c));
-  cls.value = s.current_class; $('rej').checked = s.show_rejected;
+  cls.value = ui.cls; $('rej').checked = ui.showRejected;
 
-  const sel = s.annotations.find(a => a.i === s.selected);
+  const sel = selectedBox();
   const box = $('inspect'); box.replaceChildren();
   if (!sel) {
     box.textContent = 'Click a box in the view or press Tab to select one.';
@@ -491,33 +586,35 @@ function applyState(s) {
     box.append(f);
   }
 
-  $('listTitle').textContent = `Boxes in this frame (${s.annotations.length})`;
+  $('listTitle').textContent = `Boxes in this frame (${shown.length})`;
   const list = $('list'); list.replaceChildren();
-  for (const a of s.annotations) {
-    const d = el('div', 'item' + (a.i === s.selected ? ' sel' : ''));
+  for (const a of shown) {
+    const d = el('div', 'item' + (a.i === ui.selected ? ' sel' : ''));
     const chip = el('i', 'chip'); chip.style.background = hex(COLORS[a.status]);
     d.append(chip, el('span', null, `${a.track_id != null ? '#' + a.track_id : '-'} ${a.label}`),
       el('span', 'r', a.status === 'pending' && a.score != null ? 'pending ' + a.score.toFixed(2) : a.status));
-    d.onclick = () => act('select', { index: a.i });
+    d.onclick = () => select(a.i);
     list.appendChild(d);
   }
-  if (!s.annotations.length) list.append(el('div', 'muted small', 'Nothing here yet.'));
-  $('empty').textContent = s.annotations.length ? '' : 'No boxes in this frame. Press B to add one.';
+  if (!shown.length) list.append(el('div', 'muted small', 'Nothing here yet.'));
+  $('empty').textContent = shown.length ? '' : 'No boxes in this frame. Press B to add one.';
   drawBoxes();
   scheduleExport();
-  if (frameChanged) loadPoints(s.frame).catch(e => toast('Could not load points: ' + e.message));
 }
 
-for (const b of document.querySelectorAll('button[data-a]')) b.onclick = e => { act(b.dataset.a); if (e.detail > 0) b.blur(); };
-$('cls').onchange = e => act('set_class', { label: e.target.value });
-$('rej').onchange = () => act('toggle_rejected');
+for (const b of document.querySelectorAll('button[data-a]')) b.onclick = e => { run(b.dataset.a); if (e.detail > 0) b.blur(); };
+$('cls').onchange = e => {             // class for new boxes; also relabels the selected box
+  ui.cls = e.target.value;
+  if (selectedBox()) act('set_label', { index: ui.selected, label: ui.cls });
+};
+$('rej').onchange = e => toggleRejected(e.target.checked);
 
 function setPlaying(on) {
   playing = on; $('play').firstChild.textContent = on ? 'Pause ' : 'Play ';
   clearInterval(timer);
   if (on) timer = setInterval(async () => {
-    if (state.frame + 1 >= state.num_frames) return setPlaying(false);
-    await act('play_step');
+    if (ui.frame + 1 >= state.num_frames) return setPlaying(false);
+    await show(ui.frame + 1, false);
   }, 250);
 }
 $('play').onclick = e => { setPlaying(!playing); if (e.detail > 0) e.currentTarget.blur(); };
@@ -567,10 +664,10 @@ addEventListener('keydown', e => {
   const name = KEYS[key];
   if (!name) return;
   e.preventDefault();
-  if (!e.repeat || REPEATABLE.includes(name)) act(name);
+  if (!e.repeat || REPEATABLE.includes(name)) run(name);
 });
 
-api(API + '/state').then(r => r.json()).then(applyState).catch(e => toast('Cannot reach the server: ' + e.message));
+api(API + '/state?frame=0').then(r => r.json()).then(applyState).catch(e => toast('Cannot reach the server: ' + e.message));
 </script>
 </body>
 </html>

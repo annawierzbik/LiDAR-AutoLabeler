@@ -3,11 +3,15 @@
     GET  /                          start screen (open a folder)
     GET  /annotate?sid=<id>         the annotation page of one open session
     POST /api/folder/open           {"path": "..."}              -> {"sid"}
-    GET  /api/jobs/<sid>            loading | ready  (404 once the job failed or was finished)
-    GET  /api/s/<sid>/state         frame, selection, stats, visible boxes, save_error
+    GET  /api/jobs/<sid>            loading | ready | error  (404 once the job failed or was finished)
+    GET  /api/s/<sid>/state?frame=  boxes of that frame, stats, timeline marks, save_error, revision
+    GET  /api/s/<sid>/next_pending?frame=   {"frame": next frame with boxes to review, or null}
     GET  /api/s/<sid>/points/<i>    point cloud of frame i, raw float32 xyz
-    POST /api/s/<sid>/action        {"name": "accept"} / {"name": "goto", "frame": 12} ...
-    POST /api/s/<sid>/finish        save and close the session (409 for other tabs afterwards)
+    POST /api/s/<sid>/action        {"name": "accept", "frame": 3, "index": 1} ... -> state + "result"
+    POST /api/s/<sid>/finish        save and close the session
+
+Actions name their target explicitly (docs/adr/0001-explicit-target-actions.md); the server keeps
+no current frame or selection.
 """
 from __future__ import annotations
 
@@ -17,10 +21,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from export import FORMATS, ExportError, zip_files
 from web.manager import SessionManager
 from web.service import SessionClosed, UnknownAction
-
-from export import FORMATS, ExportError, zip_files
 
 STATIC = Path(__file__).parent / "static"
 
@@ -29,6 +32,7 @@ class Action(BaseModel):
     name: str
     frame: int | None = None
     index: int | None = None
+    track_id: int | None = None
     label: str | None = None
 
 
@@ -73,8 +77,18 @@ def create_app(manager: SessionManager) -> FastAPI:
 
     # -------------------------------------------------------------- one session
     @app.get("/api/s/{sid}/state")
-    def state(sid: str):
-        return service(sid).state()
+    def state(sid: str, frame: int = 0):
+        try:
+            return service(sid).state(frame)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.get("/api/s/{sid}/next_pending")
+    def next_pending(sid: str, frame: int):
+        try:
+            return {"frame": service(sid).next_pending(frame)}
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.get("/api/s/{sid}/points/{frame}")
     def points(sid: str, frame: int):
@@ -85,11 +99,8 @@ def create_app(manager: SessionManager) -> FastAPI:
 
     @app.post("/api/s/{sid}/action")
     def action(sid: str, a: Action):
-        args = {k: v for k, v in (("frame", a.frame), ("index", a.index), ("label", a.label)) if v is not None}
-        if a.name == "select" and a.index is None:
-            args["index"] = None
         try:
-            return service(sid).act(a.name, **args)
+            return service(sid).act(a.name, frame=a.frame, index=a.index, track_id=a.track_id, label=a.label)
         except UnknownAction:
             raise HTTPException(400, f"unknown action '{a.name}'")
         except SessionClosed as exc:

@@ -7,6 +7,10 @@ Two modes share the same data model:
 
 Every change goes through a transaction, so undo/redo and the timestamped event log
 (used to measure annotation time) work for all operations.
+
+File format v2 also stores the revision (number of changes so far, used for optimistic locking)
+and the last UNDO_LIMIT undo/redo steps, so undo keeps working after a reload. v1 files (no
+revision, no history) still load: revision 0, empty history.
 """
 from __future__ import annotations
 
@@ -19,10 +23,13 @@ from enum import Enum
 from pathlib import Path
 
 from common.boxes import BoundingBox3D
+from infra.blob import atomic_write_text
 from verification.interpolation import MAX_GAP, fill_plan
 import itertools
 
-SESSION_VERSION = 1
+SESSION_VERSION = 2
+READABLE_VERSIONS = (1, 2)
+UNDO_LIMIT = 50  # undo (and redo) steps kept in memory and in the file
 EDITABLE_FIELDS = ("x", "y", "z", "dx", "dy", "dz", "heading", "label")
 
 
@@ -167,6 +174,7 @@ class AnnotationSession:
         changed = [f for f in frames if self.frames[f] != before[f]]
         if changed:
             self._undo.append((label, {f: before[f] for f in changed}))
+            del self._undo[:-UNDO_LIMIT]
             self._redo.clear()
             self.revision += 1
             self.log(label, frame=changed[0] if len(changed) == 1 else None, **detail)
@@ -278,6 +286,7 @@ class AnnotationSession:
         for f, anns in saved.items():
             self.frames[f] = list(anns)
         destination.append((name, current))
+        del destination[:-UNDO_LIMIT]
         self.revision += 1
         self.log(label, frame=min(saved) if len(saved) == 1 else None, undone=name)
         return name
@@ -307,17 +316,18 @@ class AnnotationSession:
             "sequence": self.sequence, "mode": self.mode,
             "frame_offset": self.frame_offset, "num_frames": self.num_frames,
             "next_track_id": self._next_track_id,
+            "revision": self.revision,
             "frames": {str(f): [a.to_dict() for a in anns] for f, anns in self.frames.items() if anns},
+            "undo": [_step_to_dict(step) for step in self._undo],
+            "redo": [_step_to_dict(step) for step in self._redo],
             "events": [asdict(e) for e in self.events],
         }
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data))
-        tmp.replace(path)  # atomic: a crash while saving cannot corrupt the previous file
+        atomic_write_text(path, json.dumps(data))  # a crash while saving cannot corrupt the previous file
 
     @classmethod
     def load(cls, path, clock: Callable[[], float] = time.time) -> AnnotationSession:
         data = json.loads(Path(path).read_text())
-        if data.get("version") != SESSION_VERSION:
+        if data.get("version") not in READABLE_VERSIONS:
             raise ValueError(f"unsupported session version {data.get('version')}")
         # files written before the "participant" field was dropped still have it; it is ignored
         s = cls(data["sequence"], data["num_frames"], data["mode"], data["frame_offset"], clock)
@@ -325,5 +335,17 @@ class AnnotationSession:
         for f, anns in data["frames"].items():
             s.frames[int(f)] = [Annotation.from_dict(a) for a in anns]
         s.events = [Event(**e) for e in data["events"]]
+        s.revision = int(data.get("revision", 0))
+        s._undo = [_step_from_dict(d) for d in data.get("undo", [])][-UNDO_LIMIT:]
+        s._redo = [_step_from_dict(d) for d in data.get("redo", [])][-UNDO_LIMIT:]
         s.log("session_resume")
         return s
+
+
+def _step_to_dict(step) -> dict:
+    label, frames = step
+    return {"label": label, "frames": {str(f): [a.to_dict() for a in anns] for f, anns in frames.items()}}
+
+
+def _step_from_dict(d: dict):
+    return d["label"], {int(f): [Annotation.from_dict(a) for a in anns] for f, anns in d["frames"].items()}

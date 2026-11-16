@@ -38,17 +38,38 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     add_fov_argument(p)
 
 
-def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool = False):
+def file_names(args) -> tuple[str, str, str | None]:
+    """(sequence label, file key, legacy file key) of the sequence in `args`.
+
+    The file key names the session and cache files: a folder's folder_key, or <split>_<sequence>
+    for a KITTI sequence (training/0000 and testing/0000 must not share files). Files written
+    before the split was part of the key are named <sequence> only; they are still read for the
+    split "training" (the default then), which is the legacy key. The sequence label is what the
+    session stores as its sequence (used for export file names) and does not change."""
+    if args.folder:
+        from ingestion.folder import folder_key
+
+        key = folder_key(args.folder)   # unique per folder
+        return key, key, None
+    return args.sequence, f"{args.split}_{args.sequence}", args.sequence if args.split == "training" else None
+
+
+def _cache_candidates(name: str) -> list[Path]:
+    folder = RESULTS_DIR
+    return [folder / f"{name}.json"] + sorted(
+        p for p in folder.glob(f"{name}_*.json") if cache.is_cache_name(p.stem, name))
+
+
+def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool = False,
+                 legacy_name: str | None = None):
     """Cached detections that cover the frames in `want` and were made with the settings `meta`:
     (indices, results) sliced to `want`, or None. Looks at results/<name>.json (whole run) and
     results/<name>_f<start>-<stop>.json (partial runs), each optionally with a _c<key> suffix
     (verification/cache.py: files with other settings are not reused, files without settings are,
-    with a warning)."""
+    with a warning), then at the same names with `legacy_name`."""
     from scripts.track_sequence import parse_results
 
-    folder = RESULTS_DIR
-    candidates = [folder / f"{name}.json"] + sorted(
-        p for p in folder.glob(f"{name}_*.json") if cache.is_cache_name(p.stem, name))
+    candidates = _cache_candidates(name) + (_cache_candidates(legacy_name) if legacy_name else [])
     found = cache.choose(candidates, meta,
                          usable=lambda d: d["start"] <= want.start and want.stop <= d["stop"],
                          allow_missing_weights=allow_missing_weights)
@@ -65,19 +86,23 @@ def build_session(args):
     --start/--stop select a part of the sequence. In manual mode no detector is run at all,
     so you can start drawing immediately (and it works without a GPU)."""
     if args.folder:
-        from ingestion.folder import FolderSequence, folder_key
+        from ingestion.folder import FolderSequence
 
         seq = FolderSequence(args.folder)
-        name = folder_key(args.folder)   # unique per folder, used for cache + session file names
     else:
         seq = SequenceLoader(Path(args.data_root), args.split, args.sequence)
-        name = args.sequence
+    label, name, legacy = file_names(args)
     session_path = session_file(name, args.mode, args.start, args.stop)
 
-    if session_path.exists() and not args.fresh:
-        session = AnnotationSession.load(session_path)
-        print(f"Resumed session {session_path} ({session.stats()['reviewed']} boxes reviewed)")
-        return session, seq, session_path
+    if not args.fresh:
+        legacy_path = session_file(legacy, args.mode, args.start, args.stop) if legacy else None
+        source = session_path if session_path.exists() else (
+            legacy_path if legacy_path is not None and legacy_path.exists() else None)
+        if source is not None:
+            session = AnnotationSession.load(source)
+            moved = "" if source == session_path else f" (from the old file name; now saved as {session_path.name})"
+            print(f"Resumed session {source}{moved} ({session.stats()['reviewed']} boxes reviewed)")
+            return session, seq, session_path
 
     stop = min(args.stop if args.stop is not None else len(seq), len(seq))
     want = range(args.start, stop)
@@ -91,7 +116,7 @@ def build_session(args):
 
         split = None if args.folder else args.split
         meta = current_meta(args.threshold, sequence_mode(seq, args.fov), split)
-        found = _find_cached(name, want, meta, args.use_cache_without_weights)
+        found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy)
         if found is not None:
             indices, results = found
         else:
@@ -104,7 +129,7 @@ def build_session(args):
             path = RESULTS_DIR / (f"{name}.json" if whole else f"{name}_f{indices.start}-{indices.stop}.json")
             save_results(cache.output_path(path, meta), indices, results, meta)
     session = AnnotationSession.from_tracking(
-        name, results, args.mode, frame_offset=indices.start)
+        label, results, args.mode, frame_offset=indices.start)
     print(f"New {args.mode} session with {session.stats()['total']} system boxes in {len(indices)} frames")
     return session, seq, session_path
 

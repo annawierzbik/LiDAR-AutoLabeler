@@ -4,6 +4,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
+from infra.sessions import FileSessionStore
 from tests.test_web.test_manager import Builder, make_folder
 from web.manager import SessionManager
 from web.server import create_app
@@ -11,7 +12,7 @@ from web.server import create_app
 
 @pytest.fixture
 def env(tmp_path):
-    mgr = SessionManager(builder=Builder(tmp_path), background=False)
+    mgr = SessionManager(builder=Builder(tmp_path), background=False, store=FileSessionStore(tmp_path))
     return TestClient(create_app(mgr)), mgr, tmp_path
 
 
@@ -27,8 +28,7 @@ def test_export_preview_and_download(env, sid):
     first = preview(format="lidar")
     assert first["available"] and first["summary"]["frames"] == 0 and first["summary"]["skipped_unreviewed"] == 2
 
-    client.post(f"/api/s/{sid}/action", json={"name": "select", "index": 0})
-    client.post(f"/api/s/{sid}/action", json={"name": "accept"})
+    client.post(f"/api/s/{sid}/action", json={"name": "accept", "frame": 0, "index": 0})
     second = preview(format="lidar")["summary"]
     assert second["frames"] == 1 and second["boxes"] == 1 and second["per_class"] == {"Car": 1}
 

@@ -1,10 +1,9 @@
 """File names of saved sessions, cached detections and metrics (verification, evaluation, scripts)."""
 from __future__ import annotations
 
-from pathlib import Path
+from infra.settings import PROJECT_ROOT, get_settings  # noqa: F401  (PROJECT_ROOT re-exported)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RESULTS_DIR = PROJECT_ROOT / "results"  # absolute: results land here whatever the working directory
+RESULTS_DIR = get_settings().results_dir  # absolute: results land here whatever the working directory
 
 
 def range_tag(name: str, start: int, stop: int | None) -> str:
@@ -12,5 +11,5 @@ def range_tag(name: str, start: int, stop: int | None) -> str:
     return name if start == 0 and stop is None else f"{name}_f{start}-{stop}"
 
 
-def session_file(name: str, mode: str, start: int = 0, stop: int | None = None) -> Path:
+def session_file(name: str, mode: str, start: int = 0, stop: int | None = None):
     return RESULTS_DIR / "sessions" / f"{range_tag(name, start, stop)}_{mode}.json"

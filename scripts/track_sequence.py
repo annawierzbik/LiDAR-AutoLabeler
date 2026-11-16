@@ -24,6 +24,7 @@ import numpy as np
 
 from common.boxes import EDGES, BoundingBox3D
 from detection.fov import add_fov_argument, sequence_mode
+from infra.blob import LocalBlobStore
 from ingestion.sequence import SequenceLoader
 from tracking.tracker import Tracker
 from verification import cache
@@ -57,14 +58,13 @@ def current_meta(threshold: float, fov: str, split: str | None) -> dict:
 
 
 def save_results(path: Path, indices: range, results: list[list[BoundingBox3D]], meta: dict | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "start": indices.start, "stop": indices.stop,
         "frames": [[asdict(b) for b in boxes] for boxes in results],
     }
     if meta is not None:
         data["meta"] = meta
-    path.write_text(json.dumps(data))
+    LocalBlobStore(path.parent).put(path.name, json.dumps(data).encode("utf-8"))   # atomic
 
 
 def parse_results(data: dict):
@@ -229,7 +229,7 @@ def main() -> None:
     p.add_argument("--stop", type=int, default=None, help="exclusive; default = end of sequence")
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--fps", type=float, default=10.0)
-    p.add_argument("--cache", default=None, help="default: results/<sequence>.json")
+    p.add_argument("--cache", default=None, help="default: results/<split>_<sequence>.json")
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--use-cache-without-weights", action="store_true",
                    help="use a matching cache even though the checkpoint is missing on disk")
@@ -237,10 +237,14 @@ def main() -> None:
     args = p.parse_args()
 
     seq = SequenceLoader(Path(args.data_root), args.split, args.sequence)
-    path = Path(args.cache) if args.cache else RESULTS_DIR / f"{args.sequence}.json"
+    path = Path(args.cache) if args.cache else RESULTS_DIR / f"{args.split}_{args.sequence}.json"
     meta = current_meta(args.threshold, sequence_mode(seq, args.fov), args.split)
+    candidates = [cache.keyed_path(path, meta), path]
+    if not args.cache and args.split == "training":       # written before the split was in the name
+        old = RESULTS_DIR / f"{args.sequence}.json"
+        candidates += [cache.keyed_path(old, meta), old]
 
-    found = None if args.no_cache else cache.choose([cache.keyed_path(path, meta), path], meta,
+    found = None if args.no_cache else cache.choose(candidates, meta,
                                                     allow_missing_weights=args.use_cache_without_weights)
     if found is not None:
         print(f"Loading cached results from {found[0]}")

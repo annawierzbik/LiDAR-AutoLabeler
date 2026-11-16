@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 from common.boxes import BoundingBox3D
+from infra.sessions import FileSessionStore
+from ingestion.folder import folder_key
 from tests.test_web.test_service import FakeLoader
 from verification.session import AnnotationSession
 from web.manager import SessionManager
@@ -23,7 +25,7 @@ class Builder:
         self.calls.append(args)
         if self.fail:
             raise RuntimeError(self.fail)
-        name = f"{args.folder or args.sequence}_{args.mode}_{args.start}"
+        name = f"{folder_key(args.folder) if args.folder else args.sequence}_{args.mode}_{args.start}"
         return AnnotationSession.from_tracking("0000", [[box()], [box(11)]], args.mode), \
             FakeLoader(), self.tmp / f"{name}.json"
 
@@ -33,9 +35,14 @@ def builder(tmp_path):
     return Builder(tmp_path)
 
 
+def manager(tmp_path, builder):
+    """Sessions are stored where the Builder puts the session files."""
+    return SessionManager(builder=builder, background=False, store=FileSessionStore(tmp_path))
+
+
 @pytest.fixture
 def mgr(tmp_path, builder):
-    return SessionManager(builder=builder, background=False)
+    return manager(tmp_path, builder)
 
 
 def make_folder(tmp_path):
@@ -62,7 +69,7 @@ def test_open_folder_rejects_bad_paths_readably(mgr, tmp_path):
 
 
 def test_failed_build_is_logged_with_traceback_and_removed(tmp_path, caplog):
-    mgr = SessionManager(builder=Builder(tmp_path, fail="no GPU"), background=False)
+    mgr = manager(tmp_path, Builder(tmp_path, fail="no GPU"))
     with caplog.at_level(logging.ERROR):
         sid = mgr.open_folder(str(make_folder(tmp_path)))
     assert sid not in mgr.jobs
@@ -78,7 +85,7 @@ def test_second_tab_on_an_open_session_is_refused(mgr, tmp_path):
     assert "already open in another tab" in mgr.job(b).message and a in mgr.job(b).message
     with pytest.raises(LookupError):
         mgr.service(b)
-    assert mgr.service(a).act("add")["stats"]["manual"] == 1      # the first tab keeps working
+    assert mgr.service(a).act("add", frame=0, label="Car")["stats"]["manual"] == 1   # the first tab keeps working
 
 
 def test_session_can_be_opened_again_after_finish(mgr, tmp_path):
@@ -86,7 +93,7 @@ def test_session_can_be_opened_again_after_finish(mgr, tmp_path):
     a = mgr.open_folder(folder)
     mgr.finish(a)
     b = mgr.open_folder(folder)
-    assert mgr.job(b).status == "ready" and mgr.service(b).act("add")["stats"]["manual"] == 1
+    assert mgr.job(b).status == "ready" and mgr.service(b).act("add", frame=0, label="Car")["stats"]["manual"] == 1
 
 
 def test_other_sessions_are_not_refused(mgr, tmp_path):
@@ -100,22 +107,23 @@ def test_other_sessions_are_not_refused(mgr, tmp_path):
 def test_finish_saves_and_removes_the_job(mgr, tmp_path):
     sid = mgr.open_folder(str(make_folder(tmp_path)))
     svc = mgr.service(sid)
-    svc.act("select", index=0); svc.act("accept")
+    svc.act("accept", frame=0, index=0)
     mgr.finish(sid)
     assert sid not in mgr.jobs
-    assert svc.save_path.exists()
+    assert mgr.store.load(svc.key).stats()["accepted"] == 1
+    assert mgr.store.locked_by(svc.key) is None
 
 
 def test_finished_session_accepts_no_more_actions(mgr, tmp_path):
     sid = mgr.open_folder(str(make_folder(tmp_path)))
     svc = mgr.service(sid)
     mgr.finish(sid)
-    saved = svc.save_path.read_text()
-    with pytest.raises(LookupError):
+    saved = mgr.store.path(svc.key).read_text()
+    with pytest.raises(KeyError):
         mgr.service(sid)
     with pytest.raises(LookupError):
-        svc.act("add")                              # a stale reference cannot change it either
-    assert svc.save_path.read_text() == saved
+        svc.act("add", frame=0, label="Car")        # a stale reference cannot change it either
+    assert mgr.store.path(svc.key).read_text() == saved
 
 
 def test_reopening_a_finished_folder_gives_a_fresh_service(mgr, tmp_path):
@@ -125,4 +133,4 @@ def test_reopening_a_finished_folder_gives_a_fresh_service(mgr, tmp_path):
     mgr.finish(a)
     c = mgr.open_folder(folder)
     assert mgr.service(c) is not old
-    mgr.service(c).act("add")                       # and the fresh one works
+    mgr.service(c).act("add", frame=0, label="Car")   # and the fresh one works
