@@ -158,7 +158,7 @@ def test_add_box_stands_on_ground(c):
 
 
 def test_copy_to_next_frame_moves_there(c):
-    c.goto(2); c.add_box(); tid = c.selected_annotation().box.track_id
+    c.goto(2); c.add_box()
     c.goto(1)  # frame 1 has no such track
     c.goto(2)
     c.select(0)

@@ -33,7 +33,7 @@ def verify_kitti_sequence(data_root: str, split: str, sequence: str) -> bool:
         try:
             calib = parse_calib_file(calib_file)
             print(f"  [OK] Calibration parsed successfully ({len(calib)} keys found).")
-        except Exception as e:
+        except (OSError, ValueError, IndexError) as e:   # what the parsers raise for bad files
             print(f"  [ERROR] Failed to parse calibration file: {e}")
             return False
 
@@ -43,7 +43,7 @@ def verify_kitti_sequence(data_root: str, split: str, sequence: str) -> bool:
         try:
             labels = parse_tracking_labels(label_file)
             print(f"  [OK] Labels parsed successfully ({len(labels)} frames annotated).")
-        except Exception as e:
+        except (OSError, ValueError, IndexError) as e:   # what the parsers raise for bad files
             print(f"  [ERROR] Failed to parse label file: {e}")
             return False
 
@@ -54,7 +54,7 @@ def verify_kitti_sequence(data_root: str, split: str, sequence: str) -> bool:
             if points.shape[1] < 3:
                 print(f"  [ERROR] Invalid point shape in {sample_file.name}: {points.shape}")
                 return False
-        except Exception as e:
+        except (OSError, ValueError, IndexError) as e:   # what the parsers raise for bad files
             print(f"  [ERROR] Failed to load point cloud {sample_file.name}: {e}")
             return False
 

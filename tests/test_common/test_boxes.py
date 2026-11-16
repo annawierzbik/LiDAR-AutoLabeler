@@ -7,7 +7,7 @@ from common.boxes import EDGES, BoundingBox3D
 
 
 def make(**kw):
-    base = dict(x=1.0, y=2.0, z=-1.0, dx=4.0, dy=2.0, dz=1.5, heading=0.0, label="Car")
+    base = {"x": 1.0, "y": 2.0, "z": -1.0, "dx": 4.0, "dy": 2.0, "dz": 1.5, "heading": 0.0, "label": "Car"}
     base.update(kw)
     return BoundingBox3D(**base)
 

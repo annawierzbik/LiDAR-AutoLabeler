@@ -29,9 +29,9 @@ def clouds(tmp_path, monkeypatch):
 
 
 def args(folder, **kw):
-    base = dict(folder=str(folder), data_root="data/raw", split="training", sequence="0000", mode="assisted",
-                start=0, stop=None, threshold=0.5, fps=10.0, fresh=False, fov="none",
-                use_cache_without_weights=False)
+    base = {"folder": str(folder), "data_root": "data/raw", "split": "training", "sequence": "0000", "mode": "assisted",
+                "start": 0, "stop": None, "threshold": 0.5, "fps": 10.0, "fresh": False, "fov": "none",
+                "use_cache_without_weights": False}
     return Namespace(**{**base, **kw})
 
 

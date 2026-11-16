@@ -15,7 +15,13 @@ from pathlib import Path
 
 from detection.fov import add_fov_argument, sequence_mode
 from ingestion.sequence import SequenceLoader
-from pipeline.detect_track import current_meta, parse_results, print_stats, save_results, track_sequence
+from pipeline.detect_track import (
+    current_meta,
+    parse_results,
+    print_stats,
+    save_results,
+    track_sequence,
+)
 from verification import cache
 from verification.paths import RESULTS_DIR
 

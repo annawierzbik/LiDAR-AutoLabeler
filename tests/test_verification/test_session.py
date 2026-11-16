@@ -157,7 +157,7 @@ def test_new_action_clears_redo(s):
 
 def test_undo_add_and_edit(s):
     s.edit(0, 0, x=99.0)
-    idx = s.add_manual(0, box(50))
+    s.add_manual(0, box(50))
     s.undo()
     assert len(s.annotations(0)) == 1
     s.undo()

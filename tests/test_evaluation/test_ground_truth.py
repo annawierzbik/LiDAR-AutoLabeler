@@ -13,7 +13,7 @@ CALIB = Calibration(P2, np.eye(3), TR)
 
 
 def label(typ="Car", tid=1, dims=(1.5, 1.8, 4.0), loc=(-2.0, 1.75, 10.0), ry=0.0):
-    return dict(track_id=tid, type=typ, bbox=(0, 0, 0, 0), dimensions=dims, location=loc, rotation_y=ry)
+    return {"track_id": tid, "type": typ, "bbox": (0, 0, 0, 0), "dimensions": dims, "location": loc, "rotation_y": ry}
 
 
 def test_label_conversion_matches_hand_computation():

@@ -15,6 +15,7 @@ revision, no history) still load: revision 0, empty history.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -25,7 +26,6 @@ from pathlib import Path
 from common.boxes import BoundingBox3D
 from infra.blob import atomic_write_text
 from verification.interpolation import MAX_GAP, fill_plan
-import itertools
 
 SESSION_VERSION = 2
 READABLE_VERSIONS = (1, 2)

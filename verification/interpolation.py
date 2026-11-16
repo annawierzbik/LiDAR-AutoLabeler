@@ -7,11 +7,11 @@ max_age: for longer holes a straight line is a guess, so the human decides).
 """
 from __future__ import annotations
 
+import itertools
 from collections.abc import Mapping
 
 from common.boxes import BoundingBox3D
 from common.geometry import normalize_angle
-import itertools
 
 MAX_GAP = 3
 
