@@ -51,12 +51,13 @@ def statuses(page, server, sid, frame=0) -> list[str]:
 
 
 def wait_until(check, timeout=5.0):
-    """Poll `check()` (it may raise AssertionError) until it passes."""
+    """Poll `check()` until it passes. It may raise AssertionError, or IndexError / KeyError while
+    the server has not applied the action yet (e.g. a new box's index does not exist yet)."""
     deadline = time.time() + timeout
     while True:
         try:
             return check()
-        except AssertionError:
+        except (AssertionError, IndexError, KeyError):
             if time.time() > deadline:
                 raise
             time.sleep(0.05)
