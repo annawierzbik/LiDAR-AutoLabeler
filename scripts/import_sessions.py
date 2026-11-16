@@ -4,8 +4,10 @@
     python -m scripts.import_sessions --folder D:\\old\\sessions --url postgresql+psycopg://...
     python -m scripts.import_sessions --replace                # overwrite sessions that already exist
 
-Each file becomes one row of `sessions` (key = file name without .json, same as FileSessionStore)
-and its event log becomes rows of `session_events`. Sessions that already exist are skipped unless
+Each file becomes one row of `sessions` (key = file name without .json, same as FileSessionStore,
+metadata only), its frames rows of `session_frames`, its undo/redo history rows of
+`session_history` (at most the newest 50 steps per stack) and its event log rows of
+`session_events`. Sessions that already exist are skipped unless
 --replace is given (then the old row and its events are deleted first). The files are not changed.
 """
 from __future__ import annotations

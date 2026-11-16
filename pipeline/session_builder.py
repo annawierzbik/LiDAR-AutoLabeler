@@ -148,7 +148,7 @@ def prepare(args, store) -> tuple[object, str]:
         return seq, key
     session = new_session(args, seq)
     if store.exists(key):                                    # fresh: start over
-        store.save(key, session, expected_revision=None)
+        store.replace(key, session)
     else:
         try:
             store.create(key, session)

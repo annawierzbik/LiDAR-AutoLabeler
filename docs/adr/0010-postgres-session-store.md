@@ -1,6 +1,7 @@
 # 0010 PostgreSQL session store
 
-Status: accepted (phase 2)
+Status: accepted (phase 2). Storage of the document changed in phase 2b: see ADR 0011
+(frames and history in their own rows).
 
 ## Decision
 - Schema (SQLAlchemy 2 models in `infra/db.py`, Alembic migrations in `migrations/`):

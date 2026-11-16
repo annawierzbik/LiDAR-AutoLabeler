@@ -42,6 +42,7 @@ class Status(str, Enum):
     INTERPOLATED = "interpolated"  # filled in between two key boxes of a track, waiting for a decision
 
 
+_STATUS = {s.value: s for s in Status}   # faster than Status(value) when loading thousands of boxes
 INCLUDED = (Status.ACCEPTED, Status.EDITED, Status.MANUAL)  # these end up in the exported labels
 NEEDS_REVIEW = (Status.PENDING, Status.INTERPOLATED)         # the human still has to look at these
 KEY_STATUSES = (Status.PENDING, Status.ACCEPTED, Status.EDITED, Status.MANUAL)  # interpolation anchors
@@ -56,11 +57,16 @@ class Annotation:
         return replace(self, status=status)
 
     def to_dict(self) -> dict:
-        return {"box": asdict(self.box), "status": self.status.value}
+        # the same dict as {"box": dataclasses.asdict(self.box), ...}, built directly: asdict
+        # deep-copies field by field and was most of the time spent saving a session
+        b = self.box
+        return {"box": {"x": b.x, "y": b.y, "z": b.z, "dx": b.dx, "dy": b.dy, "dz": b.dz, "heading": b.heading,
+                        "label": b.label, "score": b.score, "track_id": b.track_id},
+                "status": self.status.value}
 
     @classmethod
     def from_dict(cls, d: dict) -> Annotation:
-        return cls(BoundingBox3D(**d["box"]), Status(d["status"]))
+        return cls(BoundingBox3D(**d["box"]), _STATUS[d["status"]])
 
 
 @dataclass
@@ -94,6 +100,10 @@ class AnnotationSession:
         self._next_track_id = 0
         self.max_gap = MAX_GAP  # longest hole in a track that gets filled automatically
         self.revision = 0  # bumped by every change of the annotations (edit, undo, ...) -> autosave trigger
+        # What changed since the session was loaded, for stores that write only the difference
+        # (PgSessionStore: frame rows and history rows). Whole-document stores ignore them.
+        self.dirty_frames: set[int] = set()
+        self.history_ops: list[tuple] = []   # ("push", "undo"|"redo", step) | ("pop", "undo"|"redo") | ("clear", "redo")
 
     @classmethod
     def from_tracking(
@@ -173,9 +183,14 @@ class AnnotationSession:
             self._fill_track(refill_track)
         changed = [f for f in frames if self.frames[f] != before[f]]
         if changed:
-            self._undo.append((label, {f: before[f] for f in changed}))
+            step = (label, {f: before[f] for f in changed})
+            self._undo.append(step)
             del self._undo[:-UNDO_LIMIT]
+            self.history_ops.append(("push", "undo", step))
+            if self._redo:
+                self.history_ops.append(("clear", "redo"))
             self._redo.clear()
+            self.dirty_frames.update(changed)
             self.revision += 1
             self.log(label, frame=changed[0] if len(changed) == 1 else None, **detail)
 
@@ -281,12 +296,15 @@ class AnnotationSession:
     def _swap(self, source: list, destination: list, label: str) -> str | None:
         if not source:
             return None
+        src, dst = ("undo", "redo") if source is self._undo else ("redo", "undo")
         name, saved = source.pop()
         current = {f: list(self.frames[f]) for f in saved}
         for f, anns in saved.items():
             self.frames[f] = list(anns)
         destination.append((name, current))
         del destination[:-UNDO_LIMIT]
+        self.history_ops += [("pop", src), ("push", dst, (name, current))]
+        self.dirty_frames.update(saved)
         self.revision += 1
         self.log(label, frame=min(saved) if len(saved) == 1 else None, undone=name)
         return name
@@ -318,8 +336,8 @@ class AnnotationSession:
             "next_track_id": self._next_track_id,
             "revision": self.revision,
             "frames": {str(f): [a.to_dict() for a in anns] for f, anns in self.frames.items() if anns},
-            "undo": [_step_to_dict(step) for step in self._undo],
-            "redo": [_step_to_dict(step) for step in self._redo],
+            "undo": [step_to_dict(step) for step in self._undo],
+            "redo": [step_to_dict(step) for step in self._redo],
         }
         if include_events:
             data["events"] = [asdict(e) for e in self.events]
@@ -341,6 +359,28 @@ class AnnotationSession:
         s._redo = [_step_from_dict(d) for d in data.get("redo", [])][-UNDO_LIMIT:]
         return s
 
+    def metadata(self) -> dict:
+        """The document without frames, history and events (stores that keep those apart)."""
+        return {"version": SESSION_VERSION, "sequence": self.sequence, "mode": self.mode,
+                "frame_offset": self.frame_offset, "num_frames": self.num_frames,
+                "next_track_id": self._next_track_id}
+
+    def history_dicts(self) -> dict[str, list[dict]]:
+        """{"undo": [step, ...], "redo": [...]}, oldest first, each step {"label", "frames"}."""
+        return {"undo": [step_to_dict(st) for st in self._undo], "redo": [step_to_dict(st) for st in self._redo]}
+
+    @classmethod
+    def from_parts(cls, meta: dict, frames: dict, undo: list[dict], redo: list[dict], revision: int,
+                   clock: Callable[[], float] = time.time) -> AnnotationSession:
+        """A session from its stored parts (PgSessionStore); `undo`/`redo` may be only the newest steps."""
+        return cls.from_dict({**meta, "frames": {str(f): a for f, a in frames.items()}, "undo": undo, "redo": redo,
+                              "revision": revision}, clock)
+
+    def clear_changes(self) -> None:
+        """Forget dirty_frames / history_ops (after the store has written them)."""
+        self.dirty_frames = set()
+        self.history_ops = []
+
     def save(self, path) -> None:
         atomic_write_text(Path(path), json.dumps(self.to_dict()))  # a crash while saving cannot corrupt the previous file
 
@@ -352,7 +392,7 @@ class AnnotationSession:
         return s
 
 
-def _step_to_dict(step) -> dict:
+def step_to_dict(step) -> dict:
     label, frames = step
     return {"label": label, "frames": {str(f): [a.to_dict() for a in anns] for f, anns in frames.items()}}
 

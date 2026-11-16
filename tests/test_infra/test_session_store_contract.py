@@ -61,6 +61,16 @@ def test_create_load_list(store):
         store.load("b")
 
 
+def request(store, key, action):
+    """One API request: load, one action, save with the loaded revision. Returns the action's result."""
+    s = store.load(key)
+    rev = s.revision
+    result = action(s)
+    if s.revision != rev:
+        store.save(key, s, expected_revision=rev)
+    return result
+
+
 def test_save_round_trip_with_history(store):
     store.create("a", session())
     s = store.load("a")
@@ -69,7 +79,35 @@ def test_save_round_trip_with_history(store):
     store.save("a", s, expected_revision=0)
     r = store.load("a")
     assert r.revision == 2 and r.annotations(1)[0].box.x == 20.0
-    assert r.undo() == "edit" and r.undo() == "accept"
+    assert request(store, "a", lambda s: s.undo()) == "edit"         # one step per request
+    assert request(store, "a", lambda s: s.undo()) == "accept"
+    assert request(store, "a", lambda s: s.undo()) is None
+    r = store.load("a")
+    assert r.annotations(0)[0].status.value == "pending" and r.annotations(1)[0].box.x == 11.0
+    assert request(store, "a", lambda s: s.redo()) == "accept"
+    assert request(store, "a", lambda s: s.redo()) == "edit"
+    assert store.load("a").annotations(1)[0].box.x == 20.0
+
+
+def test_a_new_change_clears_redo(store):
+    store.create("a", session())
+    request(store, "a", lambda s: s.accept(0, 0))
+    request(store, "a", lambda s: s.undo())
+    request(store, "a", lambda s: s.reject(1, 0))
+    assert request(store, "a", lambda s: s.redo()) is None
+
+
+def test_history_keeps_the_newest_50_steps(store):
+    from verification.session import UNDO_LIMIT
+
+    store.create("a", session())
+    for i in range(UNDO_LIMIT + 5):
+        request(store, "a", lambda s, i=i: s.edit(0, 0, x=30.0 + i))
+    undone = 0
+    while request(store, "a", lambda s: s.undo()) is not None:
+        undone += 1
+    assert undone == UNDO_LIMIT
+    assert store.load("a").annotations(0)[0].box.x == 30.0 + 4         # the 5 oldest steps were dropped
 
 
 def test_save_with_a_stale_revision_is_a_conflict(store):

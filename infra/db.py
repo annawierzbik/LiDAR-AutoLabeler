@@ -2,6 +2,11 @@
 
 The migrations in migrations/ create exactly these tables; tests check that the two agree.
 users, sequences and jobs are created now and used from phase 3/4 on.
+
+A session is stored in parts so that an action writes only what it changed (docs/adr/0011):
+`sessions.document` holds the small metadata (sequence, mode, frame offset and count, next track
+id), `session_frames` one row per non-empty frame, `session_history` one row per undo or redo step
+(only the frames that step changed), `session_events` the append-only event log.
 """
 from __future__ import annotations
 
@@ -70,7 +75,7 @@ class JobRow(Base):
 class SessionRow(Base):
     __tablename__ = "sessions"
     key: Mapped[str] = mapped_column(Text, primary_key=True)
-    document: Mapped[dict] = mapped_column(JSONB)                              # AnnotationSession.to_dict(include_events=False)
+    document: Mapped[dict] = mapped_column(JSONB)                              # metadata only, see PgSessionStore
     revision: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="open")           # open | finished
     locked_by: Mapped[str | None] = mapped_column(String(64))
@@ -80,6 +85,24 @@ class SessionRow(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                     onupdate=func.now())
+
+
+class SessionFrameRow(Base):
+    __tablename__ = "session_frames"
+    session_key: Mapped[str] = mapped_column(ForeignKey("sessions.key", ondelete="CASCADE"), primary_key=True)
+    frame: Mapped[int] = mapped_column(Integer, primary_key=True)
+    annotations: Mapped[list] = mapped_column(JSONB)                           # [Annotation.to_dict(), ...]
+
+
+class SessionHistoryRow(Base):
+    __tablename__ = "session_history"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)  # order within a stack
+    session_key: Mapped[str] = mapped_column(ForeignKey("sessions.key", ondelete="CASCADE"))
+    stack: Mapped[str] = mapped_column(String(4))                              # undo | redo
+    label: Mapped[str] = mapped_column(String(40))
+    frames: Mapped[dict] = mapped_column(JSONB)                                # {frame: [annotation]} before the step
+
+    __table_args__ = (Index("ix_session_history_session_key_stack_id", "session_key", "stack", "id"),)
 
 
 class SessionEventRow(Base):

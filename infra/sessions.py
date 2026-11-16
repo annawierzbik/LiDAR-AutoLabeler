@@ -66,6 +66,9 @@ class SessionStore(Protocol):
 
     def save(self, key: str, session: AnnotationSession, expected_revision: int | None) -> None: ...
 
+    def replace(self, key: str, session: AnnotationSession) -> None:
+        """Start an existing session over (annotations and history replaced, event log kept)."""
+
     def append_events(self, key: str, events: Sequence[Event]) -> None: ...
 
     def events(self, key: str) -> list[Event]: ...
@@ -130,6 +133,9 @@ class FileSessionStore:
             data = session.to_dict(include_events=False)
             data["events"] = stored.get("events", []) + [asdict(e) for e in session.events]
             atomic_write_text(self.path(key), json.dumps(data))
+
+    def replace(self, key: str, session: AnnotationSession) -> None:
+        self.save(key, session, expected_revision=None)
 
     def append_events(self, key: str, events: Sequence[Event]) -> None:
         if not events:

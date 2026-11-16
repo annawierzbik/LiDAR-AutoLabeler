@@ -1,11 +1,16 @@
-"""SessionStore on PostgreSQL (tables `sessions` and `session_events`, infra/db.py).
+"""SessionStore on PostgreSQL (infra/db.py), storing a session in parts (docs/adr/0011).
 
-- The document (annotations, revision, undo/redo history) is one JSONB value per session.
-- `save` is optimistic: UPDATE ... WHERE key = :key AND revision = :expected. No row updated means
-  someone else saved first -> RevisionConflict (the API answers 409).
-- Events are rows of `session_events`, only ever inserted; they never touch the revision.
-- The lock is `locked_by` / `locked_at`: taken or refreshed (heartbeat) with one conditional
-  UPDATE, free again when `locked_at` is older than `lock_ttl` seconds.
+- `sessions.document`: metadata only; `session_frames`: one row per frame (written for non-empty
+  frames at creation); `session_history`: one row per undo / redo step holding only the frames that
+  step changed, the newest UNDO_LIMIT per stack; `session_events`: the append-only event log.
+- `load` reads the metadata, every frame row and only the newest step of each stack (one action per
+  request never needs more), so its cost does not depend on the length of the history.
+- `save` is optimistic and writes only what the request changed, in one transaction:
+  UPDATE sessions ... WHERE key = :key AND revision = :expected (no row -> RevisionConflict, HTTP 409),
+  upsert of the frames in `session.dirty_frames`, the history operations of the request
+  (`session.history_ops`), trimming each stack to UNDO_LIMIT rows, new events.
+- Events never touch the revision. The lock is `locked_by` / `locked_at`: taken or refreshed
+  (heartbeat) with one conditional UPDATE, free again when `locked_at` is older than `lock_ttl`.
 """
 from __future__ import annotations
 
@@ -14,10 +19,11 @@ import time
 from collections.abc import Callable, Sequence
 
 from sqlalchemy import delete, insert, select, update
-from sqlalchemy.engine import Engine
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
-from infra.db import SessionEventRow, SessionRow
+from infra.db import SessionEventRow, SessionFrameRow, SessionHistoryRow, SessionRow
 from infra.sessions import (
     DEFAULT_LOCK_TTL,
     RevisionConflict,
@@ -25,7 +31,7 @@ from infra.sessions import (
     SessionLocked,
     SessionNotFound,
 )
-from verification.session import AnnotationSession, Event
+from verification.session import UNDO_LIMIT, AnnotationSession, Event, step_to_dict
 
 
 class PgSessionStore:
@@ -42,6 +48,16 @@ class PgSessionStore:
         return [{"session_key": key, "t": e.t, "action": e.action, "frame": e.frame, "detail": e.detail}
                 for e in events]
 
+    @staticmethod
+    def _frame_rows(key: str, session: AnnotationSession, frames) -> list[dict]:
+        return [{"session_key": key, "frame": f, "annotations": [a.to_dict() for a in session.frames[f]]}
+                for f in sorted(frames)]
+
+    @staticmethod
+    def _history_row(key: str, stack: str, step) -> dict:
+        d = step_to_dict(step)
+        return {"session_key": key, "stack": stack, "label": d["label"], "frames": d["frames"]}
+
     # ------------------------------------------------------------- documents
     def exists(self, key: str) -> bool:
         with self.engine.connect() as c:
@@ -50,36 +66,102 @@ class PgSessionStore:
     def load(self, key: str) -> AnnotationSession:
         with self.engine.connect() as c:
             row = c.execute(select(SessionRow.document, SessionRow.revision).where(SessionRow.key == key)).first()
-        if row is None:
-            raise SessionNotFound(key)
-        s = AnnotationSession.from_dict({**row.document, "revision": row.revision})
+            if row is None:
+                raise SessionNotFound(key)
+            frames = c.execute(select(SessionFrameRow.frame, SessionFrameRow.annotations)
+                               .where(SessionFrameRow.session_key == key)).all()
+            tops = {stack: self._newest_steps(c, key, stack, 1) for stack in ("undo", "redo")}
+        s = AnnotationSession.from_parts(row.document, dict(frames), tops["undo"], tops["redo"], row.revision)
         s.events = []
+        s.clear_changes()
         return s
+
+    @staticmethod
+    def _newest_steps(c: Connection, key: str, stack: str, n: int) -> list[dict]:
+        rows = c.execute(select(SessionHistoryRow.label, SessionHistoryRow.frames)
+                         .where(SessionHistoryRow.session_key == key, SessionHistoryRow.stack == stack)
+                         .order_by(SessionHistoryRow.id.desc()).limit(n)).all()
+        return [{"label": label, "frames": frames} for label, frames in reversed(rows)]
+
+    def _write_all(self, c: Connection, key: str, session: AnnotationSession) -> None:
+        """Every frame, the whole history (as held by `session`) and its events."""
+        rows = self._frame_rows(key, session, [f for f, anns in session.frames.items() if anns])
+        if rows:
+            c.execute(insert(SessionFrameRow), rows)
+        history = [self._history_row(key, stack, st) for stack, steps in (("undo", session._undo),
+                                                                          ("redo", session._redo)) for st in steps]
+        if history:
+            c.execute(insert(SessionHistoryRow), history)
+        if session.events:
+            c.execute(insert(SessionEventRow), self._event_rows(key, session.events))
 
     def create(self, key: str, session: AnnotationSession) -> None:
         try:
             with self.engine.begin() as c:
-                c.execute(insert(SessionRow).values(key=key, document=session.to_dict(include_events=False),
+                c.execute(insert(SessionRow).values(key=key, document=session.metadata(),
                                                     revision=session.revision, status="open"))
-                if session.events:
-                    c.execute(insert(SessionEventRow), self._event_rows(key, session.events))
+                self._write_all(c, key, session)
         except IntegrityError:
             raise SessionExists(key) from None
+        session.clear_changes()
+
+    def replace(self, key: str, session: AnnotationSession) -> None:
+        """Start the session over with `session` (frames and history replaced, event log kept)."""
+        with self.engine.begin() as c:
+            done = c.execute(update(SessionRow).where(SessionRow.key == key)
+                             .values(document=session.metadata(), revision=session.revision, status="open",
+                                     updated_at=self._now()).returning(SessionRow.key)).first()
+            if done is None:
+                raise SessionNotFound(key)
+            c.execute(delete(SessionFrameRow).where(SessionFrameRow.session_key == key))
+            c.execute(delete(SessionHistoryRow).where(SessionHistoryRow.session_key == key))
+            self._write_all(c, key, session)
+        session.clear_changes()
 
     def save(self, key: str, session: AnnotationSession, expected_revision: int | None) -> None:
         stmt = update(SessionRow).where(SessionRow.key == key)
         if expected_revision is not None:
             stmt = stmt.where(SessionRow.revision == expected_revision)
         with self.engine.begin() as c:
-            done = c.execute(stmt.values(document=session.to_dict(include_events=False), revision=session.revision,
+            done = c.execute(stmt.values(document=session.metadata(), revision=session.revision,
                                          updated_at=self._now()).returning(SessionRow.key)).first()
             if done is None:
                 stored = c.execute(select(SessionRow.revision).where(SessionRow.key == key)).scalar()
                 if stored is None:
                     raise SessionNotFound(key)
                 raise RevisionConflict(key, expected_revision, stored)
+            if session.dirty_frames:
+                up = pg_insert(SessionFrameRow)
+                c.execute(up.on_conflict_do_update(index_elements=[SessionFrameRow.session_key, SessionFrameRow.frame],
+                                                   set_={"annotations": up.excluded.annotations}),
+                          self._frame_rows(key, session, session.dirty_frames))
+            self._apply_history(c, key, session.history_ops)
             if session.events:
                 c.execute(insert(SessionEventRow), self._event_rows(key, session.events))
+        session.clear_changes()
+
+    def _apply_history(self, c: Connection, key: str, ops: list[tuple]) -> None:
+        pushed = set()
+        for op in ops:
+            stack = op[1]
+            rows = (SessionHistoryRow.session_key == key, SessionHistoryRow.stack == stack)
+            if op[0] == "push":
+                c.execute(insert(SessionHistoryRow), [self._history_row(key, stack, op[2])])
+                pushed.add(stack)
+            elif op[0] == "pop":
+                newest = select(SessionHistoryRow.id).where(*rows).order_by(SessionHistoryRow.id.desc()).limit(1)
+                c.execute(delete(SessionHistoryRow).where(SessionHistoryRow.id == newest.scalar_subquery()))
+            else:                                                  # clear
+                c.execute(delete(SessionHistoryRow).where(*rows))
+        for stack in pushed:                                       # keep the newest UNDO_LIMIT steps
+            rows = (SessionHistoryRow.session_key == key, SessionHistoryRow.stack == stack)
+            oldest_kept = (select(SessionHistoryRow.id).where(*rows).order_by(SessionHistoryRow.id.desc())
+                           .offset(UNDO_LIMIT - 1).limit(1).scalar_subquery())
+            c.execute(delete(SessionHistoryRow).where(*rows, SessionHistoryRow.id < oldest_kept))
+
+    def history_length(self, key: str) -> dict[str, int]:
+        with self.engine.connect() as c:
+            return {stack: len(self._newest_steps(c, key, stack, UNDO_LIMIT + 10)) for stack in ("undo", "redo")}
 
     def append_events(self, key: str, events: Sequence[Event]) -> None:
         if not events:

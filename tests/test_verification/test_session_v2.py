@@ -86,3 +86,24 @@ def test_save_is_atomic(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         s.save(tmp_path / "s.json")
     assert (tmp_path / "s.json").read_text() == before
+
+
+def test_fast_serialisation_writes_exactly_what_asdict_wrote(tmp_path):
+    """Phase 2b: Annotation.to_dict builds the dict directly; the file format must not change."""
+    import dataclasses
+    import random
+
+    rng = random.Random(0)
+    s = AnnotationSession.from_tracking("0000", [[BoundingBox3D(rng.uniform(-50, 50), rng.uniform(-20, 20), -1.0,
+                                                                rng.uniform(0.5, 5), 1.8, 1.5, rng.uniform(-3, 3),
+                                                                rng.choice(["Car", "Pedestrian"]), rng.random(),
+                                                                rng.choice([None, 3, 7]))
+                                                  for _ in range(5)] for _ in range(4)])
+    s.accept(0, 0)
+    for anns in s.frames.values():
+        for a in anns:
+            assert a.to_dict() == {"box": dataclasses.asdict(a.box), "status": a.status.value}
+            assert json.dumps(a.to_dict()) == json.dumps({"box": dataclasses.asdict(a.box), "status": a.status.value})
+    s.save(tmp_path / "s.json")
+    again = AnnotationSession.load(tmp_path / "s.json")
+    assert again.to_dict(include_events=False) == s.to_dict(include_events=False)

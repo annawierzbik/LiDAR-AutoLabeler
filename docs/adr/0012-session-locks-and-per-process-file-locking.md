@@ -26,3 +26,10 @@ Status: accepted (phase 2); replaces the second-tab refusal of phase 1
 - Open issue for phase 4: after a restart (or on another replica) the old tab's sid is unknown to
   the new process (the sid -> handle map is in memory), so that tab gets 404 and must reopen the
   sequence. Phase 4 stores the handles (sequence, key) in the database.
+
+## Planned for phase 4 (decided at the phase 2b review, not implemented yet)
+- A session lock must be re-acquirable immediately by the same user and client after a server
+  restart, instead of waiting for the lock to expire (the owner will be a user + client id, not
+  only the in-memory sid).
+- The tab-to-session binding (sid -> session key, sequence) moves to the database, so any API
+  process can serve a tab.
