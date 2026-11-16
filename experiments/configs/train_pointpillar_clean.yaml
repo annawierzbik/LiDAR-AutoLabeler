@@ -1,0 +1,26 @@
+# PointPillars retrained on the KITTI object train split without the drives of the excluded
+# tracking sequences (ImageSets/train_clean.txt, made by experiments.run_clean_train_split).
+# Everything not listed under `overrides` is the model-zoo config tools/cfgs/kitti_models/pointpillar.yaml.
+# Run plan: (a) seed 666 (tag seed666); (c) a second seed: --set seed=<s> tag=seed<s>.
+experiment_id: E0
+seed: 666                      # train.py --fix_random_seed uses 666 (the model-zoo seed itself is not published)
+name: pointpillar_train_clean
+cfg_group: kitti_models_clean  # -> OpenPCDet/tools/cfgs/kitti_models_clean/pointpillar_train_clean.yaml
+base_config: cfgs/kitti_models/pointpillar.yaml
+tag: seed666
+gpu_poll_s: 2
+
+overrides:
+  DATA_CONFIG.DATA_SPLIT: {train: train_clean, test: val}
+  DATA_CONFIG.INFO_PATH: {train: [kitti_infos_train_clean.pkl], test: [kitti_infos_val.pkl]}
+  DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST.0.DB_INFO_PATH: [kitti_dbinfos_train_clean.pkl]
+  # as in the model zoo; needs OpenPCDet/data/kitti/training/planes (7481 files). The Stage B timing
+  # runs (tags timing_*, launcher_check_*) were made with false because planes were not downloaded yet.
+  DATA_CONFIG.DATA_AUGMENTOR.AUG_CONFIG_LIST.0.USE_ROAD_PLANE: true
+
+train:
+  batch_size: 4                # per GPU in the model-zoo config; the zoo used 8 GPUs (README)
+  workers: 4
+  epochs: 80
+  ckpt_save_interval: 1
+  max_ckpt_save_num: 30

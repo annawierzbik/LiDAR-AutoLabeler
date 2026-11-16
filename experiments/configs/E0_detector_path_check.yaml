@@ -1,0 +1,24 @@
+# E0: OpenPCDet tools/test.py vs the system's Detector wrapper on the same KITTI val frames, and the
+# point crop of the wrapper (detection/fov.py). Run section=azimuth first: it derives the default
+# theta of the "azimuth" crop.
+experiment_id: E0
+seed: 0
+section: model          # azimuth | model
+model: zoo              # --set model=<key>
+max_frames: null        # null = all 3769 val frames
+score_threshold: 0.1    # = POST_PROCESSING.SCORE_THRESH of tools/test.py
+modes: [none, camera, azimuth]
+azimuth_theta_deg: null # null = detection.fov.AZIMUTH_THETA_DEG
+detector_fov: per path  # recorded per path in the result's detector_fov
+
+azimuth:
+  hist_bin_deg: 0.01
+  quantiles: [50, 90, 99, 99.5, 99.9, 100]
+  theta_quantile: 99.5
+
+models:
+  zoo: {cfg: OpenPCDet/tools/cfgs/kitti_models/pointpillar.yaml, weights: checkpoints/pointpillar_7728.pth,
+        val_result: results/E0/20261028-180344_val_zoo_25407e.json}
+  clean_666: {cfg: OpenPCDet/tools/cfgs/kitti_models_clean/pointpillar_train_clean.yaml,
+              weights: OpenPCDet/output/kitti_models_clean/pointpillar_train_clean/seed666/pointpillar_train_clean_seed666.pth,
+              val_result: results/E0/20261029-021254_val_clean_666_1b274f.json}

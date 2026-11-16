@@ -108,14 +108,19 @@ class ReviewController:
 
     # ------------------------------------------------------------------- review
     def accept(self) -> bool:
+        """Accept the selected box. With nothing selected, only select the first box of this frame
+        that needs a decision (same in the desktop window and the browser). True if a box was accepted."""
         if self.selected is None:
+            self.select_next_pending()
             return False
         self.session.accept(self.frame, self.selected)
         self._advance_after_review()
         return True
 
     def reject(self) -> bool:
+        """Reject the selected box; with nothing selected, behaves like `accept` (selects only)."""
         if self.selected is None:
+            self.select_next_pending()
             return False
         was_manual = self.selected_annotation().status is Status.MANUAL
         self.session.reject(self.frame, self.selected)

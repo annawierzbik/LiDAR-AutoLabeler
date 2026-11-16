@@ -71,10 +71,30 @@ def test_failed_build_is_logged_with_traceback_and_removed(tmp_path, caplog):
         mgr.service(sid)
 
 
-def test_same_session_is_shared_not_duplicated(mgr, tmp_path):
+def test_second_tab_on_an_open_session_is_refused(mgr, tmp_path):
     folder = str(make_folder(tmp_path))
     a, b = mgr.open_folder(folder), mgr.open_folder(folder)
-    assert a != b and mgr.service(a) is mgr.service(b)
+    assert mgr.job(b).status == "error"
+    assert "already open in another tab" in mgr.job(b).message and a in mgr.job(b).message
+    with pytest.raises(LookupError):
+        mgr.service(b)
+    assert mgr.service(a).act("add")["stats"]["manual"] == 1      # the first tab keeps working
+
+
+def test_session_can_be_opened_again_after_finish(mgr, tmp_path):
+    folder = str(make_folder(tmp_path))
+    a = mgr.open_folder(folder)
+    mgr.finish(a)
+    b = mgr.open_folder(folder)
+    assert mgr.job(b).status == "ready" and mgr.service(b).act("add")["stats"]["manual"] == 1
+
+
+def test_other_sessions_are_not_refused(mgr, tmp_path):
+    a = mgr.open_folder(str(make_folder(tmp_path)))
+    other = tmp_path / "x"
+    other.mkdir()
+    b = mgr.open_folder(str(make_folder(other)))
+    assert mgr.job(a).status == mgr.job(b).status == "ready"
 
 
 def test_finish_saves_and_removes_the_job(mgr, tmp_path):
@@ -96,14 +116,6 @@ def test_finished_session_accepts_no_more_actions(mgr, tmp_path):
     with pytest.raises(LookupError):
         svc.act("add")                              # a stale reference cannot change it either
     assert svc.save_path.read_text() == saved
-
-
-def test_finish_closes_the_session_for_every_tab(mgr, tmp_path):
-    folder = str(make_folder(tmp_path))
-    a, b = mgr.open_folder(folder), mgr.open_folder(folder)
-    mgr.finish(a)
-    with pytest.raises(LookupError, match="closed"):
-        mgr.service(b)
 
 
 def test_reopening_a_finished_folder_gives_a_fresh_service(mgr, tmp_path):

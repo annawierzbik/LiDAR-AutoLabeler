@@ -17,6 +17,7 @@ import json
 import time
 from pathlib import Path
 
+from detection.fov import add_fov_argument
 from evaluation.detection_metrics import DetectionEvaluator
 from evaluation.report import print_detection, print_per_sequence, print_tracking
 from evaluation.runner import (
@@ -37,6 +38,7 @@ def main() -> None:
     p.add_argument("--threshold", type=float, default=0.5, help="score threshold fed to the tracker")
     p.add_argument("--name", default="all", help="name of this run, used in the output file name")
     p.add_argument("--no-cache", action="store_true")
+    add_fov_argument(p)
     args = p.parse_args()
 
     data_root = Path(args.data_root)
@@ -50,7 +52,7 @@ def main() -> None:
     for k, seq_id in enumerate(sequences, 1):
         print(f"[{k}/{len(sequences)}] sequence {seq_id}")
         summary = evaluate_sequence(seq_id, data_root, args.split, args.threshold,
-                                    not args.no_cache, det_eval, stop=args.stop)
+                                    not args.no_cache, det_eval, stop=args.stop, fov=args.fov)
         if summary is not None:
             per_seq[seq_id] = summary
     if not per_seq:

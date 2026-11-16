@@ -7,7 +7,6 @@ Open3D window has on its keys) and autosaves when the annotations changed.
 """
 from __future__ import annotations
 
-import math
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -16,10 +15,10 @@ from pathlib import Path
 import numpy as np
 
 from verification.controller import CLASSES, ReviewController
+from verification.edit_steps import MOVE_STEP, ROT_STEP, SIZE_STEP, Z_STEP  # same steps as the desktop UI
 from verification.session import AnnotationSession
 from export import ExportResult, export_session
 
-MOVE_STEP, Z_STEP, ROT_STEP, SIZE_STEP = 0.10, 0.05, math.radians(2.0), 0.10  # same steps as the desktop UI
 CACHE_FRAMES = 8
 
 

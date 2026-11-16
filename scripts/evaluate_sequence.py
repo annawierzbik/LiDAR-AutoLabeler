@@ -11,6 +11,7 @@ import argparse
 import json
 from pathlib import Path
 
+from detection.fov import add_fov_argument
 from evaluation.detection_metrics import DetectionEvaluator
 from evaluation.report import print_detection, print_tracking
 from evaluation.runner import evaluate_sequence
@@ -26,11 +27,12 @@ def main() -> None:
     p.add_argument("--stop", type=int, default=None)
     p.add_argument("--threshold", type=float, default=0.5, help="score threshold fed to the tracker")
     p.add_argument("--no-cache", action="store_true")
+    add_fov_argument(p)
     args = p.parse_args()
 
     det_eval = DetectionEvaluator()
     trk = evaluate_sequence(args.sequence, Path(args.data_root), args.split, args.threshold,
-                            not args.no_cache, det_eval, args.start, args.stop)
+                            not args.no_cache, det_eval, args.start, args.stop, args.fov)
     if trk is None:
         return
 

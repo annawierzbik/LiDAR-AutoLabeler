@@ -23,20 +23,23 @@ from pathlib import Path
 import numpy as np
 
 from common.boxes import EDGES, BoundingBox3D
+from detection.fov import add_fov_argument, sequence_mode
 from ingestion.sequence import SequenceLoader
 from tracking.tracker import Tracker
+from verification import cache
 from verification.paths import RESULTS_DIR
 
 KEY_SPACE, KEY_R, KEY_RIGHT, KEY_LEFT = 32, 82, 262, 263
 
 
 # ----------------------------------------------------------------- computation
-def track_sequence(seq: SequenceLoader, indices: range, threshold: float) -> list[list[BoundingBox3D]]:
+def track_sequence(seq: SequenceLoader, indices: range, threshold: float,
+                   fov: str = "auto") -> list[list[BoundingBox3D]]:
     from detection.detector import (
         Detector,  # heavy import (torch + pcdet), only when needed
     )
 
-    detector = Detector(score_threshold=threshold)
+    detector = Detector(score_threshold=threshold, fov=fov)
     tracker = Tracker()
     results = []
     t0 = time.time()
@@ -47,20 +50,31 @@ def track_sequence(seq: SequenceLoader, indices: range, threshold: float) -> lis
     return results
 
 
-def save_results(path: Path, indices: range, results: list[list[BoundingBox3D]]) -> None:
+def current_meta(threshold: float, fov: str, split: str | None) -> dict:
+    """Settings of track_sequence(): default detector, `threshold`, resolved FOV crop
+    (detection.fov.sequence_mode), default Tracker(); `split` = KITTI split or None for a folder."""
+    return cache.make_meta(threshold, cache.tracker_params(Tracker()), fov=fov, split=split)
+
+
+def save_results(path: Path, indices: range, results: list[list[BoundingBox3D]], meta: dict | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "start": indices.start, "stop": indices.stop,
         "frames": [[asdict(b) for b in boxes] for boxes in results],
     }
+    if meta is not None:
+        data["meta"] = meta
     path.write_text(json.dumps(data))
 
 
-def load_results(path: Path):
-    data = json.loads(path.read_text())
+def parse_results(data: dict):
     indices = range(data["start"], data["stop"])
     results = [[BoundingBox3D(**b) for b in boxes] for boxes in data["frames"]]
     return indices, results
+
+
+def load_results(path: Path):
+    return parse_results(json.loads(path.read_text()))
 
 
 def print_stats(results: list[list[BoundingBox3D]]) -> None:
@@ -217,21 +231,28 @@ def main() -> None:
     p.add_argument("--fps", type=float, default=10.0)
     p.add_argument("--cache", default=None, help="default: results/<sequence>.json")
     p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--use-cache-without-weights", action="store_true",
+                   help="use a matching cache even though the checkpoint is missing on disk")
+    add_fov_argument(p)
     args = p.parse_args()
 
     seq = SequenceLoader(Path(args.data_root), args.split, args.sequence)
-    cache = Path(args.cache) if args.cache else RESULTS_DIR / f"{args.sequence}.json"
+    path = Path(args.cache) if args.cache else RESULTS_DIR / f"{args.sequence}.json"
+    meta = current_meta(args.threshold, sequence_mode(seq, args.fov), args.split)
 
-    if cache.exists() and not args.no_cache:
-        print(f"Loading cached results from {cache}")
-        indices, results = load_results(cache)
+    found = None if args.no_cache else cache.choose([cache.keyed_path(path, meta), path], meta,
+                                                    allow_missing_weights=args.use_cache_without_weights)
+    if found is not None:
+        print(f"Loading cached results from {found[0]}")
+        indices, results = parse_results(found[1])
     else:
         stop = min(args.stop if args.stop is not None else len(seq), len(seq))
         indices = range(args.start, stop)
         print(f"Detecting + tracking frames {indices.start}..{indices.stop - 1}")
-        results = track_sequence(seq, indices, args.threshold)
-        save_results(cache, indices, results)
-        print(f"Saved to {cache}")
+        results = track_sequence(seq, indices, args.threshold, args.fov)
+        out = cache.output_path(path, meta)
+        save_results(out, indices, results, meta)
+        print(f"Saved to {out}")
 
     print_stats(results)
     print("\nControls: SPACE pause | LEFT/RIGHT step | R restart | =/- speed | WASD+E/C fly | mouse orbit | Q quit")

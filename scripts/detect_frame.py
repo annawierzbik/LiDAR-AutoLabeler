@@ -14,6 +14,7 @@ import open3d as o3d
 
 from common.boxes import EDGES, BoundingBox3D
 from detection.detector import Detector  # imports torch first
+from detection.fov import add_fov_argument
 from ingestion.sequence import SequenceLoader
 
 CLASS_COLORS = {
@@ -46,12 +47,13 @@ def main() -> None:
     p.add_argument("--sequence", default="0000")
     p.add_argument("--frame", type=int, default=0)
     p.add_argument("--threshold", type=float, default=0.5)
+    add_fov_argument(p)
     args = p.parse_args()
 
     seq = SequenceLoader(Path(args.data_root), args.split, args.sequence)
     frame = seq[args.frame]
 
-    detector = Detector(score_threshold=args.threshold)
+    detector = Detector(score_threshold=args.threshold, fov=args.fov)
     boxes = detector.predict(frame)
 
     print(f"Frame {frame.frame_id}: {frame.num_points} points, {len(boxes)} detections")

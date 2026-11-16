@@ -1,0 +1,35 @@
+# E0: repo detection metric vs OpenPCDet KITTI evaluator, same predictions (KITTI object val).
+seed: 0
+split: val
+weights: checkpoints/pointpillar_7728.pth
+openpcdet_result: OpenPCDet/output/kitti_models/pointpillar/e0_crosscheck/eval/epoch_7728/val/default/result.pkl
+reference_eval_dict: results/E0/cache/reference_eval_dict.pkl   # null to skip (experiments/tools/reference_kitti_eval.py)
+iou_check_frames: 300
+
+# Each variant overrides experiments.lib.repo_eval.REPO_DEFAULT
+# (ignore: repo, ignore_iou: 0.3, fov_filter: true, dontcare_2d: null, difficulty: null, iou: 3d).
+variants:
+  repo_default: {}
+  no_fov_filter: {fov_filter: false}
+  ignore_none: {ignore: none}
+  ignore_kitti_classes: {ignore: kitti}
+  ignore_kitti_classes_class_iou: {ignore: kitti, ignore_iou: class}
+  dontcare_2d: {dontcare_2d: 0.5}
+  difficulty_moderate: {difficulty: moderate}
+  difficulty_hard: {difficulty: hard}
+  kitti_rules_no_difficulty: {ignore: kitti, ignore_iou: class, fov_filter: false}
+  repo_default_bev: {iou: bev}
+
+# OpenPCDet's rules, applied per difficulty for the cross-check (3D and BEV).
+aligned_rules: {ignore: kitti, ignore_iou: class, fov_filter: false, dontcare_2d: null}
+
+# Repo metric on the dev tracking sequences (detections by the system's Detector, cached in results/E0/cache).
+tracking_dev:
+  enabled: true
+  # Detector wrapper crop (detection/fov.py). The run of 2026-10-28 was made before the crop existed ("none").
+  detector_fov: auto
+  variants:
+    repo_default: {}
+    ignore_person: {extra_ignore: [Person]}
+    ignore_none: {ignore: none}
+    ignore_kitti_classes: {ignore: kitti}

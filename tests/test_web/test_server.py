@@ -72,9 +72,13 @@ def test_finish_removes_the_job_and_stops_actions(env, sid):
     assert client.post(f"/api/s/{sid}/action", json={"name": "add"}).status_code == 404
 
 
-def test_other_tab_on_a_finished_session_gets_409(env, sid):
+def test_second_tab_is_refused_with_a_message_until_finish(env, sid):
     client, _, tmp = env
     other = client.post("/api/folder/open", json={"path": str(tmp / "clouds")}).json()["sid"]
-    client.post(f"/api/s/{sid}/finish")
-    assert client.post(f"/api/s/{other}/action", json={"name": "add"}).status_code == 409
+    job = client.get(f"/api/jobs/{other}").json()
+    assert job["status"] == "error" and "already open in another tab" in job["message"] and sid in job["message"]
     assert client.get(f"/api/s/{other}/state").status_code == 409
+    assert client.post(f"/api/s/{sid}/action", json={"name": "add"}).status_code == 200
+    client.post(f"/api/s/{sid}/finish")
+    again = client.post("/api/folder/open", json={"path": str(tmp / "clouds")}).json()["sid"]
+    assert client.get(f"/api/jobs/{again}").json()["status"] == "ready"

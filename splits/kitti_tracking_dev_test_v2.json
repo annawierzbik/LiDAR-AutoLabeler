@@ -1,0 +1,118 @@
+{
+  "name": "v2",
+  "description": "All 21 KITTI tracking training sequences split by whole sequences. For detectors trained on ImageSets/train_clean.txt (no frames from the raw drives of any of these sequences). Tune on dev only; test needs --final.",
+  "seed": 0,
+  "test_fraction": 0.5,
+  "sequences": [
+    "0000",
+    "0001",
+    "0002",
+    "0003",
+    "0004",
+    "0005",
+    "0006",
+    "0007",
+    "0008",
+    "0009",
+    "0010",
+    "0011",
+    "0012",
+    "0013",
+    "0014",
+    "0015",
+    "0016",
+    "0017",
+    "0018",
+    "0019",
+    "0020"
+  ],
+  "dev": [
+    "0001",
+    "0004",
+    "0005",
+    "0006",
+    "0007",
+    "0008",
+    "0012",
+    "0013",
+    "0015",
+    "0016",
+    "0020"
+  ],
+  "test": [
+    "0000",
+    "0002",
+    "0003",
+    "0009",
+    "0010",
+    "0011",
+    "0014",
+    "0017",
+    "0018",
+    "0019"
+  ],
+  "balance": {
+    "dev": {
+      "sequences": 11,
+      "frames": 4354,
+      "frame_fraction": 0.5439780109945027
+    },
+    "test": {
+      "sequences": 10,
+      "frames": 3650,
+      "frame_fraction": 0.45602198900549723
+    }
+  },
+  "label_counts": {
+    "dev": {
+      "boxes": {
+        "Car": 16059,
+        "Cyclist": 1286,
+        "DontCare": 10584,
+        "Misc": 627,
+        "Pedestrian": 4016,
+        "Person": 167,
+        "Tram": 51,
+        "Truck": 468,
+        "Van": 1729
+      },
+      "tracks": {
+        "Car": 363,
+        "Cyclist": 24,
+        "DontCare": 11,
+        "Misc": 14,
+        "Pedestrian": 83,
+        "Person": 14,
+        "Tram": 1,
+        "Truck": 10,
+        "Van": 32
+      }
+    },
+    "test": {
+      "boxes": {
+        "Car": 11241,
+        "Cyclist": 652,
+        "DontCare": 7455,
+        "Misc": 166,
+        "Pedestrian": 7454,
+        "Person": 509,
+        "Tram": 544,
+        "Truck": 721,
+        "Van": 1572
+      },
+      "tracks": {
+        "Car": 216,
+        "Cyclist": 13,
+        "DontCare": 10,
+        "Misc": 4,
+        "Pedestrian": 84,
+        "Person": 20,
+        "Tram": 11,
+        "Truck": 3,
+        "Van": 25
+      }
+    }
+  },
+  "frozen": true,
+  "created_by_run": "20261028-175209_split_v2_f27424"
+}

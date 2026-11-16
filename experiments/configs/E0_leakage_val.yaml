@@ -1,0 +1,13 @@
+# E0: KITTI val detection AP (OpenPCDet evaluator) of the models compared in the leakage analysis.
+experiment_id: E0
+seed: 0
+model: zoo          # choose with --set model=<key>
+batch_size: 4
+detector_fov: openpcdet_fov_points_only   # tools/test.py: KittiDataset with FOV_POINTS_ONLY (fixed, informational)
+models:
+  zoo: {cfg: OpenPCDet/tools/cfgs/kitti_models/pointpillar.yaml,
+        weights: checkpoints/pointpillar_7728.pth}
+  full_666: {cfg: OpenPCDet/tools/cfgs/kitti_models_clean/pointpillar_train_full.yaml,
+             weights: OpenPCDet/output/kitti_models_clean/pointpillar_train_full/seed666/pointpillar_train_full_seed666.pth}
+  clean_666: {cfg: OpenPCDet/tools/cfgs/kitti_models_clean/pointpillar_train_clean.yaml,
+              weights: OpenPCDet/output/kitti_models_clean/pointpillar_train_clean/seed666/pointpillar_train_clean_seed666.pth}

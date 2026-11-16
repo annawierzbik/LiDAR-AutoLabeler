@@ -1,0 +1,20 @@
+# E0: effect of leakage on detection + tracking: model-zoo PointPillars (trained on frames of these
+# sequences' drives) vs retrained on full train vs retrained on train_clean (never saw them).
+experiment_id: E0
+seed: 0
+purpose: leakage_analysis
+# Points fed to the Detector wrapper (detection/fov.py): auto = camera crop (the tracking sequences
+# have calibration). The runs of 2026-10-28/29 were made before the crop existed, i.e. with "none".
+detector_fov: auto
+model: zoo                                   # choose with --set model=<key>
+sequences: kitti_tracking_dev_test.json:excluded   # the 14 excluded sequences of split v1
+models:
+  zoo:          {cfg: OpenPCDet/tools/cfgs/kitti_models/pointpillar.yaml, weights: checkpoints/pointpillar_7728.pth}
+  full_666:     {cfg: OpenPCDet/tools/cfgs/kitti_models_clean/pointpillar_train_full.yaml,
+                 weights: OpenPCDet/output/kitti_models_clean/pointpillar_train_full/seed666/pointpillar_train_full_seed666.pth}
+  clean_666:    {cfg: OpenPCDet/tools/cfgs/kitti_models_clean/pointpillar_train_clean.yaml,
+                 weights: OpenPCDet/output/kitti_models_clean/pointpillar_train_clean/seed666/pointpillar_train_clean_seed666.pth}
+tracking:                                    # system defaults (scripts/evaluate_all.py, tracking.tracker.Tracker)
+  threshold: 0.5
+  match_iou: 0.3
+  tracker: {}

@@ -1,0 +1,5 @@
+# Extra packages for the experiment framework (on top of ../requirements.txt).
+# Install with:  pip install -r experiments/requirements.txt "numpy==1.26.4"
+matplotlib       # figures (PDF + PNG)
+ipykernel        # notebooks/ (analysis only)
+nbclient         # executing notebooks from the terminal

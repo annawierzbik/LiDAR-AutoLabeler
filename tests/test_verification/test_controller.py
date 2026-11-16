@@ -66,8 +66,26 @@ def test_select_step_skips_hidden_rejected(c):
 
 
 def test_nothing_selected_means_no_review_action(c):
-    assert not c.accept() and not c.reject() and not c.nudge(dx=1) and not c.set_field("x", 1.0)
+    assert not c.nudge(dx=1) and not c.set_field("x", 1.0)
     assert c.accept_track() == 0
+
+
+@pytest.mark.parametrize("action", ["accept", "reject"])
+def test_accept_or_reject_with_nothing_selected_only_selects_the_first_pending_box(c, action):
+    before = [a.status for a in c.annotations()]
+    assert getattr(c, action)() is False
+    assert c.selected == 0
+    assert [a.status for a in c.annotations()] == before       # nothing decided yet
+    assert getattr(c, action)() is True                         # the second press decides
+
+
+def test_browser_accept_with_nothing_selected_behaves_like_the_desktop(c):
+    from tests.test_web.test_service import FakeLoader
+    from web.service import ReviewService
+
+    svc = ReviewService(c.session, FakeLoader())
+    st = svc.act("accept")
+    assert st["selected"] == 0 and st["stats"]["reviewed"] == 0
 
 
 def test_accept_track_whole_and_from_here(c):

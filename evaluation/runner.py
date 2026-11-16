@@ -12,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from common.boxes import BoundingBox3D
+from detection.fov import sequence_mode
 from evaluation.detection_metrics import DetectionEvaluator
 from evaluation.ground_truth import filter_to_camera_fov, load_frame_gt
 from evaluation.tracking_metrics import TrackingEvaluator
@@ -19,22 +20,22 @@ from ingestion.calibration import Calibration
 from ingestion.loader import parse_tracking_labels
 from ingestion.sequence import SequenceLoader
 from tracking.tracker import Tracker
+from verification import cache
 from verification.paths import RESULTS_DIR
 
 RAW_THRESHOLD = 0.1  # low on purpose: AP needs the whole score range
-_detector = None     # created once, reused for all sequences
+_detectors: dict = {}  # created once per FOV mode, reused for all sequences
 
 
-def _get_detector():
-    global _detector
-    if _detector is None:
+def _get_detector(fov: str = "auto"):
+    if fov not in _detectors:
         from detection.detector import Detector  # heavy import, only when needed
-        _detector = Detector(score_threshold=RAW_THRESHOLD)
-    return _detector
+        _detectors[fov] = Detector(score_threshold=RAW_THRESHOLD, fov=fov)
+    return _detectors[fov]
 
 
-def run_detector(seq: SequenceLoader, indices: range) -> list[list[BoundingBox3D]]:
-    detector = _get_detector()
+def run_detector(seq: SequenceLoader, indices: range, fov: str = "auto") -> list[list[BoundingBox3D]]:
+    detector = _get_detector(fov)
     out, t0 = [], time.time()
     for n, i in enumerate(indices, 1):
         out.append(detector.predict(seq[i]))
@@ -43,18 +44,28 @@ def run_detector(seq: SequenceLoader, indices: range) -> list[list[BoundingBox3D
     return out
 
 
-def load_or_detect(seq, indices: range, cache: Path, use_cache: bool) -> list[list[BoundingBox3D]]:
-    if use_cache and cache.exists():
-        data = json.loads(cache.read_text())
-        if data["start"] == indices.start and data["stop"] == indices.stop:
-            print(f"    loaded cached detections ({cache.name})")
-            return [[BoundingBox3D(**b) for b in frame] for frame in data["frames"]]
-        print("    cache covers a different frame range -> recomputing")
-    dets = run_detector(seq, indices)
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({
+def load_or_detect(seq, indices: range, path: Path, use_cache: bool, split: str | None = "training",
+                   fov: str = "auto", allow_missing_weights: bool = False) -> list[list[BoundingBox3D]]:
+    """Detections of `indices`, from `path` (or its _c<key> variant, see verification/cache.py)
+    when it holds exactly this frame range and was made with the same detector settings
+    (including the resolved FOV crop and the KITTI split)."""
+    meta = cache.make_meta(RAW_THRESHOLD, fov=sequence_mode(seq, fov), split=split)
+    if use_cache:
+        found = cache.choose([cache.keyed_path(path, meta), path], meta,
+                             usable=lambda d: d["start"] == indices.start and d["stop"] == indices.stop,
+                             allow_missing_weights=allow_missing_weights)
+        if found is not None:
+            print(f"    loaded cached detections ({found[0].name})")
+            return [[BoundingBox3D(**b) for b in frame] for frame in found[1]["frames"]]
+        if path.exists():
+            print("    no cached detections for this frame range and these settings -> recomputing")
+    dets = run_detector(seq, indices, fov)
+    out = cache.output_path(path, meta)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
         "start": indices.start, "stop": indices.stop,
         "frames": [[asdict(b) for b in frame] for frame in dets],
+        "meta": meta,
     }))
     return dets
 
@@ -93,6 +104,7 @@ def evaluate_sequence(
     det_eval: DetectionEvaluator,
     start: int = 0,
     stop: int | None = None,
+    fov: str = "auto",
 ) -> dict | None:
     """Returns the tracking summary of this sequence (None if it has no labels).
     Detection results are accumulated into `det_eval`."""
@@ -107,7 +119,8 @@ def evaluate_sequence(
     labels = parse_tracking_labels(label_path)
 
     indices = range(start, min(stop if stop is not None else len(seq), len(seq)))
-    detections = load_or_detect(seq, indices, RESULTS_DIR / f"{sequence}_detections.json", use_cache)
+    detections = load_or_detect(seq, indices, RESULTS_DIR / f"{sequence}_detections.json", use_cache,
+                                split, fov)
 
     trk_eval, tracker = TrackingEvaluator(), Tracker()
     for i, dets in zip(indices, detections):

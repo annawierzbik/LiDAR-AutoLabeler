@@ -1,0 +1,12 @@
+# E0: split v2 - all 21 KITTI tracking training sequences, for the detector retrained on train_clean.
+# E1-E3 use this split with the clean model; E4 (model-zoo detectors) uses only v1's clean sequences.
+name: v2
+file: kitti_tracking_dev_test_v2.json
+description: >-
+  All 21 KITTI tracking training sequences split by whole sequences. For detectors trained on
+  ImageSets/train_clean.txt (no frames from the raw drives of any of these sequences). Tune on dev
+  only; test needs --final.
+tracking_split: training
+sequences: all
+test_fraction: 0.5
+split_seed: 0

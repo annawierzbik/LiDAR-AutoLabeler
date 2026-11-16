@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from detection.fov import add_fov_argument, sequence_mode
 from ingestion.sequence import SequenceLoader
+from verification import cache
 from verification.paths import RESULTS_DIR, session_file
 from verification.session import AnnotationSession
 
@@ -31,23 +33,30 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--fps", type=float, default=10.0)
     p.add_argument("--fresh", action="store_true", help="ignore a saved session and start over")
+    p.add_argument("--use-cache-without-weights", action="store_true",
+                   help="use matching cached detections even though the checkpoint is missing on disk")
+    add_fov_argument(p)
 
 
-def _find_cached(name: str, want: range):
-    """Cached detections that cover the frames in `want`: (indices, results) sliced to `want`, or None.
-    Looks at results/<name>.json (whole run) and results/<name>_f<start>-<stop>.json (partial runs)."""
-    from scripts.track_sequence import load_results
+def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool = False):
+    """Cached detections that cover the frames in `want` and were made with the settings `meta`:
+    (indices, results) sliced to `want`, or None. Looks at results/<name>.json (whole run) and
+    results/<name>_f<start>-<stop>.json (partial runs), each optionally with a _c<key> suffix
+    (verification/cache.py: files with other settings are not reused, files without settings are,
+    with a warning)."""
+    from scripts.track_sequence import parse_results
 
     folder = RESULTS_DIR
-    candidates = [folder / f"{name}.json"] + sorted(folder.glob(f"{name}_f*-*.json"))
-    for path in candidates:
-        if not path.exists():
-            continue
-        indices, results = load_results(path)
-        if indices.start <= want.start and want.stop <= indices.stop:
-            offset = want.start - indices.start
-            return want, results[offset: offset + len(want)]
-    return None
+    candidates = [folder / f"{name}.json"] + sorted(
+        p for p in folder.glob(f"{name}_*.json") if cache.is_cache_name(p.stem, name))
+    found = cache.choose(candidates, meta,
+                         usable=lambda d: d["start"] <= want.start and want.stop <= d["stop"],
+                         allow_missing_weights=allow_missing_weights)
+    if found is None:
+        return None
+    indices, results = parse_results(found[1])
+    offset = want.start - indices.start
+    return want, results[offset: offset + len(want)]
 
 
 def build_session(args):
@@ -78,7 +87,11 @@ def build_session(args):
     if args.mode == "manual":
         indices, results = want, [[] for _ in want]
     else:
-        found = _find_cached(name, want)
+        from scripts.track_sequence import current_meta
+
+        split = None if args.folder else args.split
+        meta = current_meta(args.threshold, sequence_mode(seq, args.fov), split)
+        found = _find_cached(name, want, meta, args.use_cache_without_weights)
         if found is not None:
             indices, results = found
         else:
@@ -86,10 +99,10 @@ def build_session(args):
 
             indices = want
             print(f"Detecting + tracking frames {indices.start}..{indices.stop - 1}")
-            results = track_sequence(seq, indices, args.threshold)
+            results = track_sequence(seq, indices, args.threshold, args.fov)
             whole = indices.start == 0 and indices.stop == len(seq)
-            cache = RESULTS_DIR / (f"{name}.json" if whole else f"{name}_f{indices.start}-{indices.stop}.json")
-            save_results(cache, indices, results)
+            path = RESULTS_DIR / (f"{name}.json" if whole else f"{name}_f{indices.start}-{indices.stop}.json")
+            save_results(cache.output_path(path, meta), indices, results, meta)
     session = AnnotationSession.from_tracking(
         name, results, args.mode, frame_offset=indices.start)
     print(f"New {args.mode} session with {session.stats()['total']} system boxes in {len(indices)} frames")

@@ -67,18 +67,33 @@ class SessionManager:
         return job.sid
 
     def _build(self, job: Job, args) -> None:
+        """Build the session. If the same session file is already open in a live service, the new
+        job is refused (status "error", message names the open session id) and the open one keeps
+        working: two tabs on one ReviewController would share frame and selection."""
         try:
             session, seq, path = self.builder(args)
             with self._lock:
                 key = str(path)
-                service = self.by_path.get(key)       # same session already open: share it
-                if service is None or service.closed:
+                open_sid = self._open_sid(key)
+                if open_sid is None:
                     service = ReviewService(session, seq, path)
                     self.by_path[key] = service
+            if open_sid is not None:
+                job.status = "error"
+                job.message = (f"This session is already open in another tab (session id {open_sid}). "
+                               "Continue there, or finish it first.")
+                return
             job.service, job.status = service, "ready"
         except Exception:
             log.exception("Could not open session %s (%s)", job.sid, job.title)
             self.jobs.pop(job.sid, None)
+
+    def _open_sid(self, key: str) -> str | None:
+        """Id of the job holding the live service of session file `key`, or None."""
+        service = self.by_path.get(key)
+        if service is None or service.closed:
+            return None
+        return next((sid for sid, j in self.jobs.items() if j.service is service), None)
 
     def job(self, sid: str) -> Job:
         return self.jobs[sid]

@@ -18,6 +18,7 @@ from open3d.visualization import gui, rendering
 
 from common.boxes import EDGES
 from verification.controller import CLASSES, ReviewController
+from verification.edit_steps import MOVE_STEP, ROT_STEP, SIZE_STEP, Z_STEP
 from verification.session import AnnotationSession, Status
 
 STATUS_COLORS = {
@@ -31,7 +32,6 @@ STATUS_COLORS = {
 SELECTED_COLOR = (1.0, 1.0, 1.0)
 FRONT_DIAGONALS = [(0, 5), (1, 4)]  # cross on the front face shows where the box is heading
 
-MOVE_STEP, Z_STEP, ROT_STEP, SIZE_STEP = 0.10, 0.05, math.radians(2.0), 0.10
 
 HELP_LINES = [
     "Left/Right  previous/next frame",
@@ -144,8 +144,8 @@ class VerificationApp:
         p.add_child(self.listview)
 
         row = gui.Horiz(0.3 * em)
-        row.add_child(self._button("Accept (A)", lambda: self._act(self._accept)))
-        row.add_child(self._button("Reject (R)", lambda: self._act(self._reject)))
+        row.add_child(self._button("Accept (A)", lambda: self._act(self.ctrl.accept)))
+        row.add_child(self._button("Reject (R)", lambda: self._act(self.ctrl.reject)))
         p.add_child(row)
         row = gui.Horiz(0.3 * em)
         row.add_child(self._button("Accept track (T)", lambda: self._act(self.ctrl.accept_track)))
@@ -323,18 +323,6 @@ class VerificationApp:
         action()
         self._after_action()
 
-    def _accept(self) -> None:
-        if self.ctrl.selected is None:
-            self.ctrl.select_next_pending()
-        else:
-            self.ctrl.accept()
-
-    def _reject(self) -> None:
-        if self.ctrl.selected is None:
-            self.ctrl.select_next_pending()
-        else:
-            self.ctrl.reject()
-
     def _copy_next(self) -> None:
         if self.ctrl.copy_selected_to_next_frame():
             self._refresh_points()
@@ -427,9 +415,9 @@ class VerificationApp:
         elif k == K.LEFT_BRACKET:
             c.select_step(-1); self._after_action()
         elif k in (ord("A"), K.ENTER):
-            self._act(self._accept)
+            self._act(self.ctrl.accept)
         elif k in (ord("R"), K.DELETE, K.BACKSPACE):
-            self._act(self._reject)
+            self._act(self.ctrl.reject)
         elif k == ord("T"):
             self._act(c.accept_track)
         elif k == ord("X"):

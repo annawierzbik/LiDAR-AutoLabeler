@@ -1,0 +1,7 @@
+# E0: leakage check between KITTI tracking and the KITTI object train split + dev/test split.
+seed: 0
+tracking_split: training          # data/raw/<tracking_split>/velodyne/<seq>
+detector_train_split: train       # ImageSets/<name>.txt the pretrained detector was trained on
+contamination_rule: frame         # frame | drive (see experiments/lib/leakage.py: is_contaminated)
+test_fraction: 0.5                # share of clean sequences that go to test
+split_seed: 0

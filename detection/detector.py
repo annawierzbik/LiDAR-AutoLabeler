@@ -18,12 +18,9 @@ import numpy as np
 import torch
 
 from common.boxes import BoundingBox3D
+from detection.fov import AZIMUTH_THETA_DEG, crop_points, resolve_mode
+from detection.paths import DEFAULT_CFG, DEFAULT_CKPT, OPENPCDET_ROOT, PROJECT_ROOT  # noqa: F401
 from ingestion.frame import Frame
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OPENPCDET_ROOT = PROJECT_ROOT / "OpenPCDet"
-DEFAULT_CFG = OPENPCDET_ROOT / "tools" / "cfgs" / "kitti_models" / "pointpillar.yaml"
-DEFAULT_CKPT = PROJECT_ROOT / "checkpoints" / "pointpillar_7728.pth"
 
 if str(OPENPCDET_ROOT) not in sys.path:  # allows use without `pip install -e`
     sys.path.insert(0, str(OPENPCDET_ROOT))
@@ -78,7 +75,11 @@ class Detector:
         checkpoint: Path = DEFAULT_CKPT,
         score_threshold: float = 0.5,
         device: str = "cuda",
+        fov: str = "auto",
+        fov_theta_deg: float = AZIMUTH_THETA_DEG,
     ) -> None:
+        """`fov`: crop of the input points before inference, see detection/fov.py
+        ("auto" = "camera" when the frame has a calibration, else "azimuth"; "none" = no crop)."""
         cfg_file, checkpoint = Path(cfg_file), Path(checkpoint)
         if not cfg_file.exists():
             raise FileNotFoundError(f"Config not found: {cfg_file}")
@@ -87,8 +88,11 @@ class Detector:
         if device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA requested but not available")
 
+        resolve_mode(fov, True)  # validates the name
         self.device = device
         self.score_threshold = score_threshold
+        self.fov, self.fov_theta_deg = fov, fov_theta_deg
+        self.last_fov: str | None = None  # resolved mode of the last predict() call
         self.logger = common_utils.create_logger()
 
         with _chdir(cfg_file.parents[2]):  # .../tools
@@ -107,11 +111,15 @@ class Detector:
         self.model.eval()
 
     @torch.no_grad()
-    def predict(self, frame: Frame) -> list[BoundingBox3D]:
-        """Detect objects in one frame. Boxes are in the LiDAR frame."""
+    def predict(self, frame: Frame, image_size: tuple[int, int] | None = None) -> list[BoundingBox3D]:
+        """Detect objects in one frame. Boxes are in the LiDAR frame.
+        `image_size` (width, height) is used by the "camera" crop (default: nominal KITTI size)."""
         points = np.ascontiguousarray(frame.points[:, :4], dtype=np.float32)
         if points.shape[1] < 4:
             raise ValueError("PointPillars needs (x, y, z, intensity) points")
+        points, self.last_fov = crop_points(points, self.fov, frame.calib, self.fov_theta_deg, image_size)
+        if len(points) == 0:
+            return []
 
         self.dataset.set_points(points)
         data_dict = self.dataset.collate_batch([self.dataset[0]])

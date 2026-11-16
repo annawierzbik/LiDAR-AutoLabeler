@@ -1,0 +1,47 @@
+{
+  "description": "KITTI tracking training sequences without frames of the detector's training split, divided by whole sequences. Tune on dev only; test needs --final.",
+  "contamination_rule": "frame",
+  "detector_train_split": "train",
+  "seed": 0,
+  "test_fraction": 0.5,
+  "excluded": [
+    "0000",
+    "0002",
+    "0003",
+    "0005",
+    "0006",
+    "0009",
+    "0010",
+    "0011",
+    "0012",
+    "0013",
+    "0014",
+    "0016",
+    "0017",
+    "0018"
+  ],
+  "dev": [
+    "0008",
+    "0019",
+    "0020"
+  ],
+  "test": [
+    "0001",
+    "0004",
+    "0007",
+    "0015"
+  ],
+  "balance": {
+    "dev": {
+      "sequences": 3,
+      "frames": 2286,
+      "frame_fraction": 0.5418345579521213
+    },
+    "test": {
+      "sequences": 4,
+      "frames": 1933,
+      "frame_fraction": 0.4581654420478786
+    }
+  },
+  "created_by_run": "20261028-164652_leakage_a91ab0"
+}
