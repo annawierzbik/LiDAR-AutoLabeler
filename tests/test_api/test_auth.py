@@ -178,3 +178,38 @@ def test_create_user_cli(api, monkeypatch, capsys):
     assert main(["root", "--password-stdin"]) == 1                        # exists already
     monkeypatch.setattr("sys.stdin", io.StringIO("short\n"))
     assert main(["other", "--password-stdin"]) == 1
+
+
+def test_cookie_lifetimes_refresh_window_and_no_failed_login_limit(api):
+    """The facts recorded in ADR 0016 (review after phase 4), including the known limits: refresh
+    tokens slide and are not single-use; the API itself does not limit failed logins."""
+    import jwt
+
+    api.user("anna")
+    c = TestClient(api.app)
+    for _ in range(10):                                                # no lockout, no counter
+        r = c.post("/api/v1/auth/login", json={"username": "anna", "password": "wrong password!"})
+        assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_credentials"
+    r = c.post("/api/v1/auth/login", json={"username": "anna", "password": PASSWORD})
+    assert r.status_code == 200
+    cookies = set_cookies(r)
+    assert "max-age=900" in cookies["lal_access"]                      # 15 min
+    assert "max-age=604800" in cookies["lal_refresh"] and "max-age=604800" in cookies["lal_csrf"]   # 7 days
+    other = api.login("anna")                                          # logout clears all three cookies
+    cleared = set_cookies(other.post("/api/v1/auth/logout"))
+    assert set(cleared) == {"lal_access", "lal_refresh", "lal_csrf"} and all("max-age=0" in v for v in cleared.values())
+    r = c.post("/api/v1/auth/login", json={"username": "anna", "password": PASSWORD})   # logout ended c's login
+    first = c.cookies["lal_refresh"]
+    secret = api.svc.settings.jwt_secret.get_secret_value()
+
+    def claims(token):
+        return jwt.decode(token, secret, algorithms=["HS256"], options={"verify_exp": False, "verify_iat": False})
+
+    exp1 = claims(first)["exp"]
+    api.svc.tokens.clock = lambda: exp1 - 3600                         # an hour before it expires
+    r = c.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": c.cookies["lal_csrf"]})
+    assert r.status_code == 200
+    assert claims(c.cookies["lal_refresh"])["exp"] == exp1 - 3600 + 7 * 86400   # a sliding window
+    old = TestClient(api.app, cookies={"lal_refresh": first}).post("/api/v1/auth/refresh",
+                                                                   headers={"X-CSRF-Token": c.cookies["lal_csrf"]})
+    assert old.status_code == 200                                      # the older refresh token still works

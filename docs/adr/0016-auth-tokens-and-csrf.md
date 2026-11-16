@@ -40,6 +40,43 @@ token).
   repeating the request; if that fails it goes to `/login?next=<path>` (only same-site paths are
   followed after login).
 
+## Review after phase 4: cookie flags, lifetimes, logout, failed logins
+
+| cookie | content | HttpOnly | Secure | SameSite | Path | Max-Age |
+|---|---|---|---|---|---|---|
+| `lal_access` | access JWT | yes | yes* | Strict | `/` | `LAL_ACCESS_TOKEN_MINUTES` (15 min) |
+| `lal_refresh` | refresh JWT | yes | yes* | Strict | `/api/v1/auth` | `LAL_REFRESH_TOKEN_DAYS` (7 days) |
+| `lal_csrf` | CSRF value (not a credential alone) | no | yes* | Strict | `/` | as the refresh token |
+
+\* `Secure` is set by the API itself (`LAL_COOKIE_SECURE`, default true), independent of the scheme
+the API process sees. Behind the TLS gateway of phase 5 the browser talks HTTPS, so the flag is
+right although nginx speaks plain HTTP to the API; `LAL_COOKIE_SECURE=false` is only for local
+work over plain http. The `__Host-` cookie prefix is not used (it would forbid `Path=/api/v1/auth`
+for the refresh cookie).
+
+- **Lifetimes.** An access token is valid 15 minutes, a refresh token 7 days (both checked against
+  `exp` in the token, not only by the cookie's Max-Age). `/auth/refresh` issues a new access token
+  *and* a new refresh token, so the 7 days are a sliding window: a user who uses the page at least
+  once a week stays logged in until logout. Refresh tokens are not single-use: an older refresh
+  token stays valid until its `exp` or until `token_version` changes; a stolen one works for up to
+  7 days unless the user logs out or the password changes. Single-use rotation would need a token
+  table (not done).
+- **Logout** (`POST /api/v1/auth/logout`, needs the CSRF header) increments the user's
+  `token_version`, which ends every access and refresh token of that user on every device, and
+  clears the three cookies with the same attributes they were set with. With an expired access
+  token the page refreshes first and then logs out (`client.js`); if that fails too the cookies are
+  left in the browser but are already useless. The change takes effect on the next request to any
+  replica, because every request reads the user row.
+- **Repeated failed logins: nothing in the API limits them yet.** There is no per-account lockout,
+  no per-IP counter and no delay; the only cost is the argon2id verification, which takes the same
+  time for unknown user names. Measured once on the Windows 11 development machine (argon2-cffi
+  default parameters m=65536 KiB, t=3, p=4; 20 wrong-password verifications in one process):
+  median 35.2 ms, min 30.7 ms, max 41.2 ms. The limit is planned at the gateway in phase 5 (nginx `limit_req` on
+  `/api/v1/auth/login` per client IP). A per-account lockout was not chosen: it lets anyone lock a
+  known user out; if needed, a per-account delay with a counter in Redis would be the next step.
+- These facts are pinned by
+  `tests/test_api/test_auth.py::test_cookie_lifetimes_refresh_window_and_no_failed_login_limit`.
+
 ## Consequences
 - Revocation is per user (all devices), not per token; a per-device logout would need a token
   table.
