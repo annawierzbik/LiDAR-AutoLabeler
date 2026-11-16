@@ -171,3 +171,22 @@ def test_unknown_session(store):
         store.save("zz", session(), expected_revision=0)       # new sessions are made with create()
     with pytest.raises(SessionNotFound):
         store.append_events("zz", [Event(1.0, "frame_change", 0)])
+
+
+@pytest.mark.parametrize("bad", [None, "3", 1.0, True])
+def test_save_needs_the_loaded_revision(store, bad):
+    """No unchecked save: starting a session over is replace(), everything else names the revision."""
+    store.create("a", session())
+    with pytest.raises(TypeError, match="replace"):
+        store.save("a", store.load("a"), expected_revision=bad)
+
+
+def test_replace_starts_the_session_over_and_keeps_the_log(store):
+    store.create("a", session())
+    request(store, "a", lambda s: s.accept(0, 0))
+    n = len(store.events("a"))
+    fresh = session()
+    store.replace("a", fresh)
+    r = store.load("a")
+    assert r.annotations(0)[0].status.value == "pending" and r.revision == 0
+    assert len(store.events("a")) >= n                                 # the event log is kept

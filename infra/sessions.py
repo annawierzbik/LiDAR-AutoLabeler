@@ -6,7 +6,8 @@ Contract (FileSessionStore here, PgSessionStore in infra/pg_sessions.py):
   `events(key)`), so a session loaded for one request only holds the events of that request.
 - `create(key, session)` stores a new session and its events; SessionExists if the key is taken.
 - `save(key, session, expected_revision)` stores the document and appends `session.events`.
-  RevisionConflict when the stored revision is not `expected_revision` (None: no check).
+  RevisionConflict when the stored revision is not `expected_revision`; there is no unchecked save
+  (starting a session over is `replace`).
 - `append_events(key, events)` only appends to the log: the revision does not change, so looking
   at a frame or playing back never conflicts with an edit (docs/adr/0013).
 - `lock(key, owner)` gives one owner (a browser tab's session id) the session for `lock_ttl`
@@ -64,7 +65,7 @@ class SessionStore(Protocol):
 
     def create(self, key: str, session: AnnotationSession) -> None: ...
 
-    def save(self, key: str, session: AnnotationSession, expected_revision: int | None) -> None: ...
+    def save(self, key: str, session: AnnotationSession, expected_revision: int) -> None: ...
 
     def replace(self, key: str, session: AnnotationSession) -> None:
         """Start an existing session over (annotations and history replaced, event log kept)."""
@@ -83,6 +84,12 @@ class SessionStore(Protocol):
         """The owner of a lock that has not expired, else None."""
 
     def finish(self, key: str, owner: str) -> None: ...
+
+
+def check_revision_argument(expected_revision) -> None:
+    if not isinstance(expected_revision, int) or isinstance(expected_revision, bool):
+        raise TypeError(f"expected_revision must be the revision the session was loaded at, "
+                        f"not {expected_revision!r} (use replace() to start a session over)")
 
 
 class FileSessionStore:
@@ -125,7 +132,15 @@ class FileSessionStore:
                 raise SessionExists(key)
             session.save(self.path(key))
 
-    def save(self, key: str, session: AnnotationSession, expected_revision: int | None) -> None:
+    def save(self, key: str, session: AnnotationSession, expected_revision: int) -> None:
+        check_revision_argument(expected_revision)
+        self._write(key, session, expected_revision)
+
+    def replace(self, key: str, session: AnnotationSession) -> None:
+        self._write(key, session, None)
+
+    def _write(self, key: str, session: AnnotationSession, expected_revision: int | None) -> None:
+        """expected_revision None only for `replace` (deliberately starting the session over)."""
         with self._mutex:
             stored = self._read(key)                     # SessionNotFound: use create() for new sessions
             if expected_revision is not None and stored.get("revision", 0) != expected_revision:
@@ -133,9 +148,6 @@ class FileSessionStore:
             data = session.to_dict(include_events=False)
             data["events"] = stored.get("events", []) + [asdict(e) for e in session.events]
             atomic_write_text(self.path(key), json.dumps(data))
-
-    def replace(self, key: str, session: AnnotationSession) -> None:
-        self.save(key, session, expected_revision=None)
 
     def append_events(self, key: str, events: Sequence[Event]) -> None:
         if not events:

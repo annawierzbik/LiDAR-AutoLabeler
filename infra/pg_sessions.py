@@ -30,6 +30,7 @@ from infra.sessions import (
     SessionExists,
     SessionLocked,
     SessionNotFound,
+    check_revision_argument,
 )
 from verification.session import UNDO_LIMIT, AnnotationSession, Event, step_to_dict
 
@@ -118,10 +119,9 @@ class PgSessionStore:
             self._write_all(c, key, session)
         session.clear_changes()
 
-    def save(self, key: str, session: AnnotationSession, expected_revision: int | None) -> None:
-        stmt = update(SessionRow).where(SessionRow.key == key)
-        if expected_revision is not None:
-            stmt = stmt.where(SessionRow.revision == expected_revision)
+    def save(self, key: str, session: AnnotationSession, expected_revision: int) -> None:
+        check_revision_argument(expected_revision)
+        stmt = update(SessionRow).where(SessionRow.key == key, SessionRow.revision == expected_revision)
         with self.engine.begin() as c:
             done = c.execute(stmt.values(document=session.metadata(), revision=session.revision,
                                          updated_at=self._now()).returning(SessionRow.key)).first()
