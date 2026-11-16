@@ -27,7 +27,7 @@ def test_health(api):
     assert api.app and TestClientGet(api, "/healthz") == (200, {"status": "ok"})
     status, body = TestClientGet(api, "/readyz")
     assert status == 200 and body["status"] == "ready"
-    assert set(body["checks"]) == {"database", "redis", "results_blobs", "upload_blobs"}
+    assert set(body["checks"]) == {"database", "redis", "results_blobs", "upload_blobs", "export_blobs"}
 
     def down():
         raise ConnectionError("no route to redis")

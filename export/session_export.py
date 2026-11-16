@@ -30,11 +30,16 @@ class ExportResult:
 def sequence_info(session, loader) -> tuple[list[str], Calibration | None]:
     """File names (without extension) of the session's frames and the calibration, if there is one.
 
-    Without a readable velodyne folder the names are the frame numbers, zero padded to six digits."""
+    The names come from the loader's `frame_names` (a sequence in a BlobStore, e.g. an upload) or
+    its velodyne folder; without either the names are the frame numbers, zero padded to six digits."""
     offset, n = session.frame_offset, session.num_frames
     stems = [f"{offset + i:06d}" for i in range(n)]
+    names = getattr(loader, "frame_names", None)
     velodyne = getattr(loader, "velodyne_dir", None)
-    if velodyne is not None and Path(velodyne).is_dir():
+    if names is not None:
+        if len(names) >= offset + n:
+            stems = list(names[offset: offset + n])
+    elif velodyne is not None and Path(velodyne).is_dir():
         files = frame_files(velodyne)
         if len(files) >= offset + n:
             stems = [p.stem for p in files[offset: offset + n]]

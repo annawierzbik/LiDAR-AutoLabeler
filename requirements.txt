@@ -26,6 +26,9 @@ celery[redis]==5.4.0
 kombu==5.7.0
 redis==6.2.0            # kombu 5.7 needs redis-py >= 6.1
 
+# --- Object storage (LAL_BLOB_STORE=s3, MinIO; docs/adr/0020) ---
+boto3==1.44.3
+
 # --- OpenPCDet dependencies (SharedArray intentionally left out) ---
 llvmlite
 numba

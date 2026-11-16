@@ -70,3 +70,26 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "gpu" in item.keywords:
             item.add_marker(skip)
+
+
+S3_TEST = {"endpoint": os.environ.get("LAL_TEST_S3_ENDPOINT", "http://127.0.0.1:59000"),
+           "access": os.environ.get("LAL_TEST_S3_ACCESS_KEY", "lal-local"),
+           "secret": os.environ.get("LAL_TEST_S3_SECRET_KEY", "lal-local-minio")}
+
+
+@pytest.fixture
+def s3_bucket():
+    """A fresh bucket on the MinIO of docker-compose.db.yml (marker `s3`), emptied and removed after
+    the test; yields (settings overrides for LAL_*, bucket name)."""
+    from infra.s3 import make_client
+
+    client = make_client(S3_TEST["endpoint"], S3_TEST["access"], S3_TEST["secret"], "us-east-1")
+    name = f"lal-test-{uuid.uuid4().hex[:10]}"
+    client.create_bucket(Bucket=name)
+    env = {"LAL_BLOB_STORE": "s3", "LAL_S3_ENDPOINT_URL": S3_TEST["endpoint"], "LAL_S3_BUCKET": name,
+           "LAL_S3_ACCESS_KEY": S3_TEST["access"], "LAL_S3_SECRET_KEY": S3_TEST["secret"]}
+    yield env, name, client
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=name):
+        for obj in page.get("Contents", []):
+            client.delete_object(Bucket=name, Key=obj["Key"])
+    client.delete_bucket(Bucket=name)

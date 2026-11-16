@@ -75,27 +75,23 @@ def healthz():
 
 @health.get("/readyz", responses={503: {"description": "a dependency is unreachable (see checks)"}})
 def readyz(svc: Svc):
-    """Database, Redis and the blob stores are reachable."""
-    import os
-
+    """Database, Redis and the blob areas (uploads, detection cache, exports: local folders
+    writable, or the S3 bucket reachable) can be used."""
     from sqlalchemy import text
 
-    from pipeline.session_builder import RESULTS_DIR
+    from infra import storage
 
     def database():
         with svc.engine.connect() as c:
             c.execute(text("SELECT 1"))
 
-    def writable(folder):
-        def check():
-            folder.mkdir(parents=True, exist_ok=True)
-            if not os.access(folder, os.W_OK):
-                raise OSError(f"{folder} is not writable")
-        return check
+    def blobs(make):
+        return lambda: storage.check(make())
 
     checks = {}
-    for name, fn in (("database", database), ("redis", svc.ping_redis), ("results_blobs", writable(RESULTS_DIR)),
-                     ("upload_blobs", writable(svc.settings.uploads_dir))):
+    for name, fn in (("database", database), ("redis", svc.ping_redis),
+                     ("results_blobs", blobs(storage.results_store)), ("upload_blobs", blobs(storage.uploads_store)),
+                     ("export_blobs", blobs(storage.exports_store))):
         try:
             fn()
             checks[name] = {"ok": True}

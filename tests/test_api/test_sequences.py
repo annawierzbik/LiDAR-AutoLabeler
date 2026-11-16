@@ -37,13 +37,18 @@ def assert_rejected(r, status, text):
 
 
 def test_upload_writes_the_frames_into_the_blob_store(api, anna):
+    import glob
+    import tempfile
+
+    temp = set(glob.glob(os.path.join(tempfile.gettempdir(), "lal-upload-*")))
     r = anna.upload(frames_zip(), "my drive")
     assert r.status_code == 201
     seq = r.json()
     assert seq["name"] == "my drive" and seq["num_frames"] == FRAMES and seq["source"] == "upload"
     [prefix] = uploads(api)
     assert sorted(os.listdir(api.svc.settings.uploads_dir / prefix)) == [f"{i:06d}.bin" for i in range(FRAMES)]
-    assert not os.listdir(api.svc.settings.uploads_dir / ".incoming")      # the archive is not kept
+    assert api.svc.sequences.get(seq["id"], None)["spec"] == {"blob_prefix": prefix}   # a prefix, not a path
+    assert set(glob.glob(os.path.join(tempfile.gettempdir(), "lal-upload-*"))) == temp  # the archive is not kept
 
 
 def test_upload_of_frames_at_the_top_level_and_other_files_ignored(api, anna):

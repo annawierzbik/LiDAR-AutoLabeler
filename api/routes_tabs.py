@@ -56,7 +56,7 @@ class Ready:
     key: str
     num_frames: int
     frame_offset: int
-    folder: str
+    spec: dict                  # the sequence's session-builder arguments (blob_prefix or folder)
 
 
 def lock_owner(user: Principal, client: str) -> str:
@@ -85,7 +85,7 @@ def _ready(svc: Services, sid: str, user: Principal) -> Ready:
         raise ApiError(409, msg or f"the session is not ready ({job.state})", code="not_ready")
     seq = svc.sequences.get(tab["sequence_id"], None)
     r = job.result
-    return Ready(tab, r["session_key"], r["num_frames"], r["frame_offset"], seq["spec"]["folder"])
+    return Ready(tab, r["session_key"], r["num_frames"], r["frame_offset"], seq["spec"])
 
 
 def _lock(svc: Services, ready: Ready, user: Principal, client: str) -> None:
@@ -98,11 +98,26 @@ def _lock(svc: Services, ready: Ready, user: Principal, client: str) -> None:
         raise ApiError(409, f"session {ready.key} no longer exists", code="not_ready") from None
 
 
-def _points(folder: str):
+_UPLOAD_KEYS: dict[str, list[str]] = {}       # an upload's frame keys never change: listed once per process
+
+
+def _points(spec: dict):
+    """The point clouds of a sequence spec: an upload in the uploads blob area, or a folder."""
     from infra.blob import LocalBlobStore
     from infra.points import BlobPointSource
     from ingestion.folder import frame_files
 
+    prefix = spec.get("blob_prefix")
+    if prefix:
+        from infra.sequences import upload_frame_keys
+        from infra.storage import uploads_store
+
+        blobs = uploads_store()
+        keys = _UPLOAD_KEYS.get(prefix)
+        if keys is None:
+            keys = _UPLOAD_KEYS[prefix] = upload_frame_keys(blobs, prefix)
+        return BlobPointSource(blobs, keys)
+    folder = spec["folder"]
     return BlobPointSource(LocalBlobStore(folder), [p.name for p in frame_files(folder)])
 
 
@@ -115,7 +130,7 @@ def review(svc: Services, sid: str, user: Principal, client: str) -> ReviewServi
         session = svc.sessions.load(ready.key)
     except SessionNotFound:
         raise ApiError(409, f"session {ready.key} no longer exists", code="not_ready") from None
-    return ReviewService(session, svc.sessions, ready.key, _points(ready.folder), point_cache=svc.point_cache)
+    return ReviewService(session, svc.sessions, ready.key, _points(ready.spec), point_cache=svc.point_cache)
 
 
 def _view(svc: Services, tab: dict, user: Principal, client: str) -> dict:
@@ -137,7 +152,7 @@ def _view(svc: Services, tab: dict, user: Principal, client: str) -> dict:
 
 
 # ------------------------------------------------------------------ endpoints
-@router.post("/tabs", status_code=201, responses=responses(404))
+@router.post("/tabs", status_code=201, responses=responses(404, 409))
 def open_tab(body: OpenTab, user: CurrentUser, client: ClientId,
              svc: Svc):
     """Open a sequence in this browser tab: submits the job that builds (or resumes) the user's
@@ -148,6 +163,9 @@ def open_tab(body: OpenTab, user: CurrentUser, client: ClientId,
         raise not_found("sequence", body.sequence_id) from None
     if body.stop is not None and body.stop <= body.start:
         raise ApiError(400, "stop must be greater than start")
+    if body.mode == "assisted" and not svc.settings.assisted_mode:
+        raise ApiError(409, "assisted mode is not available here (no GPU worker; LAL_ASSISTED_MODE=false); "
+                            "open the sequence in manual mode", code="assisted_unavailable")
     sid = svc.tabs.new_id()
     owner = seq["owner_id"]                     # an admin opening a user's sequence works on that user's session
     payload = open_session_payload(seq["spec"], owner, seq["id"], sid, body.mode, body.start, body.stop)
@@ -197,7 +215,7 @@ def points(sid: str, frame: int, user: CurrentUser, svc: Svc):
     ready = _ready(svc, sid, user)
     if not 0 <= frame < ready.num_frames:
         raise not_found("frame", frame)
-    data = point_bytes(_points(ready.folder), svc.point_cache, ready.key, ready.frame_offset + frame)
+    data = point_bytes(_points(ready.spec), svc.point_cache, ready.key, ready.frame_offset + frame)
     return Response(data, media_type="application/octet-stream")
 
 

@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from api.deps import AdminUser, CurrentUser, Page, Svc, owner_filter
 from api.errors import ApiError, not_found, responses
-from infra.blob import LocalBlobStore
 from infra.sequence_store import (
     InUse,
     TooLarge,
@@ -19,6 +19,7 @@ from infra.sequence_store import (
     delete_upload_files,
     extract_frames,
     new_upload_prefix,
+    remove_upload,
     resolve_registered,
 )
 
@@ -73,17 +74,19 @@ async def upload_sequence(request: Request, name: Annotated[str, Query(min_lengt
                           user: CurrentUser, svc: Svc):
     """Upload a zip of .bin frames (the request body, Content-Type application/zip). Limits:
     LAL_UPLOAD_MAX_BYTES for the archive, LAL_UPLOAD_MAX_UNPACKED_BYTES unpacked. The frames must
-    be in one folder of the archive; names are checked (no paths outside it, no links)."""
+    be in one folder of the archive; names are checked (no paths outside it, no links). The frames
+    go to the uploads blob area under seq-<random>/ (docs/adr/0020); the archive itself is only a
+    temporary file of this process."""
+    from infra.sequences import validate_upload
+    from infra.storage import uploads_store
+
     s = svc.settings
     length = request.headers.get("content-length")
     if length is not None and length.isdigit() and int(length) > s.upload_max_bytes:
         raise ApiError(413, f"the archive is larger than {s.upload_max_bytes} bytes")
-    uploads = s.uploads_dir
-    incoming = uploads / ".incoming"
-    incoming.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(suffix=".zip", dir=incoming)
+    fd, tmp = tempfile.mkstemp(prefix="lal-upload-", suffix=".zip")
     prefix = new_upload_prefix()
-    blobs = LocalBlobStore(uploads)
+    blobs = uploads_store()
     try:
         size = 0
         with os.fdopen(fd, "wb") as f:
@@ -93,22 +96,19 @@ async def upload_sequence(request: Request, name: Annotated[str, Query(min_lengt
                     raise ApiError(413, f"the archive is larger than {s.upload_max_bytes} bytes")
                 f.write(chunk)
         try:
-            extract_frames(Path(tmp), blobs, prefix, s.upload_max_unpacked_bytes)
+            await run_in_threadpool(extract_frames, Path(tmp), blobs, prefix, s.upload_max_unpacked_bytes)
         except TooLarge as exc:
             raise ApiError(413, str(exc)) from None
         except UploadRejected as exc:
             raise ApiError(400, str(exc)) from None
-        folder = uploads / prefix
         try:
-            frames = _validate(folder)
-        except ApiError:
-            for key in blobs.list(prefix + "/"):
-                blobs.delete(key)
-            folder.rmdir()
-            raise
+            frames = await run_in_threadpool(validate_upload, blobs, prefix)
+        except (OSError, ValueError) as exc:
+            await run_in_threadpool(remove_upload, blobs, prefix)
+            raise ApiError(400, str(exc)) from None
     finally:
         Path(tmp).unlink(missing_ok=True)
-    return svc.sequences.add(name.strip(), "upload", prefix, {"folder": str(folder)}, frames, user.id)
+    return svc.sequences.add(name.strip(), "upload", prefix, {"blob_prefix": prefix}, frames, user.id)
 
 
 @router.post("/sequences/register", status_code=201, response_model=SequenceView, responses=responses(400, 403, 404))
@@ -140,6 +140,7 @@ def delete_sequence(seq_id: int, user: CurrentUser, svc: Svc,
     its detection-cache entries. Refused (409 `in_use`) while it has sessions, unless an admin sends
     `force=true` (the sessions are deleted too), and while an opening of it is queued or running.
     Registered folders are not uploads (409 `not_an_upload`): their files belong to the data root."""
+    from infra.storage import uploads_store
     from pipeline.session_builder import results_blobs
 
     try:
@@ -159,5 +160,5 @@ def delete_sequence(seq_id: int, user: CurrentUser, svc: Svc,
         what = ("sessions exist for this sequence (an admin can delete them with force=true)"
                 if exc.reason == "sessions" else "the sequence is being opened; cancel or wait for the job")
         raise ApiError(409, what, code="in_use", details={exc.reason: exc.items}) from None
-    files = delete_upload_files(gone, LocalBlobStore(svc.settings.uploads_dir), results_blobs())
+    files = delete_upload_files(gone, uploads_store(), results_blobs())
     return {"id": seq_id, "sessions_deleted": gone["sessions"], **files}

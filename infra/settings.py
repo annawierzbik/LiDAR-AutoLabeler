@@ -27,7 +27,13 @@ class Settings(BaseSettings):
     session_store: Literal["file", "postgres"] = "file"
     database_url: str | None = None           # e.g. postgresql+psycopg://lal:<password>@localhost:55432/lal
     lock_ttl_seconds: float = 120.0           # a session lock expires without a heartbeat for this long
-    blob_store: Literal["local"] = "local"
+    # blob areas uploads / cache / exports (infra/storage.py, docs/adr/0020): local folders or one S3 bucket
+    blob_store: Literal["local", "s3"] = "local"
+    s3_endpoint_url: str | None = None        # e.g. http://minio:9000 (None: AWS)
+    s3_bucket: str | None = None
+    s3_access_key: str | None = None
+    s3_secret_key: SecretStr | None = None
+    s3_region: str = "us-east-1"
     # background jobs (detection + tracking on the gpu queue, export on the cpu queue), docs/adr/0015
     job_queue: Literal["thread", "celery"] = "thread"   # celery needs LAL_REDIS_URL and LAL_DATABASE_URL
     redis_url: str | None = None              # e.g. redis://127.0.0.1:56379/0
@@ -52,6 +58,7 @@ class Settings(BaseSettings):
     export_ttl_hours: float = 24.0            # stored export zips are deleted after this
     export_prune_minutes: float = 15.0        # the scheduler (celery beat) deletes expired exports this often
     page_max: int = 200                       # largest page of a list endpoint
+    assisted_mode: bool = True                # false without a GPU worker (cpu-only): assisted openings are refused
 
     @field_validator("results_dir")
     @classmethod

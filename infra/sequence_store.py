@@ -3,15 +3,17 @@
 - Upload: a zip of .bin frames. The archive is checked before anything is written: size limits
   (compressed, by the API; unpacked, here), only plain file members with safe relative names (no
   absolute paths, drive letters, "..", backslashes, symlinks or encryption), every .bin file in one
-  folder of the archive, no duplicate names. The frames are written into the uploads BlobStore
-  under `seq-<random>/` while counting the bytes actually decompressed (a member that unpacks to
-  more than its header says is stopped at the limit). Then the folder must pass
-  ingestion.folder.validate_folder, as a folder opened on disk would; otherwise it is removed.
+  folder of the archive, no duplicate names. The frames are written into the uploads blob area
+  (infra/storage.py: a local folder or the S3 bucket) under `seq-<random>/` while counting the bytes
+  actually decompressed (a member that unpacks to more than its header says is stopped at the
+  limit). Then the frames must pass infra.sequences.validate_upload (the checks of
+  ingestion.folder.validate_folder); otherwise they are removed.
 - Registration (admins only): a folder below LAL_DATA_ROOT, by its path relative to that root or
   absolute. The resolved path (symlinks followed) must be inside the resolved root.
 
-A sequence's `spec` holds the session-builder arguments that open it ({"folder": <path>}); workers
-open it from there (the uploads BlobStore is a LocalBlobStore, so the frames are a folder too).
+A sequence's `spec` holds the session-builder arguments that open it: {"blob_prefix": "seq-..."}
+for an upload (docs/adr/0020; uploads made before phase 5 have {"folder": <path>}), {"folder":
+<path>} for a registered folder (the data root is mounted read-only in API and workers).
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.engine import Engine
 
-from infra.blob import LocalBlobStore
+from infra.blob import BlobStore, LocalBlobStore
 from infra.db import JobRow, SequenceRow, SessionRow, TabRow
 
 MAX_MEMBERS = 100_000
@@ -89,7 +91,7 @@ def frame_members(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     return frames
 
 
-def extract_frames(archive: Path, blobs: LocalBlobStore, prefix: str, max_unpacked: int) -> int:
+def extract_frames(archive: Path, blobs: BlobStore, prefix: str, max_unpacked: int) -> int:
     """Write the frames of `archive` to `blobs` under `prefix`; returns the number of frames.
     Removes what was written when the archive is rejected."""
     try:
@@ -117,18 +119,24 @@ def extract_frames(archive: Path, blobs: LocalBlobStore, prefix: str, max_unpack
                 blobs.put(key, b"".join(parts))
                 written.append(key)
     except BaseException:
-        for key in written:
-            blobs.delete(key)
-        _remove_empty(blobs.root / prefix)
+        remove_upload(blobs, prefix, written)
         raise
     return len(written)
 
 
-def _remove_empty(folder: Path) -> None:
-    try:
-        folder.rmdir()
-    except OSError:
-        pass
+def remove_upload(blobs: BlobStore, prefix: str, keys: list[str] | None = None) -> int:
+    """Delete the frames of an upload (all keys under `prefix`/ unless `keys` are given); for a
+    local store also the then empty folder. Returns the number of keys deleted."""
+    from infra.storage import delete_keys
+
+    keys = blobs.list(prefix + "/") if keys is None else keys
+    delete_keys(blobs, keys)
+    if isinstance(blobs, LocalBlobStore):
+        try:
+            (blobs.root / prefix).rmdir()
+        except OSError:
+            pass
+    return len(keys)
 
 
 def resolve_registered(path: str, root: Path | None) -> Path:
@@ -218,16 +226,12 @@ def delete_upload_files(seq: dict, uploads, results) -> dict:
     """Remove the frames of a deleted upload (uploads BlobStore, prefix = its location) and its
     detection-cache entries (results BlobStore: <file key>[_f<a>-<b>][_c<config>].json, the names
     the session builder gives that sequence). Returns the counts and the cache keys removed."""
+    from infra.storage import delete_keys
     from pipeline.session_builder import file_names, make_args
     from verification.cache import is_cache_name
 
-    frames = uploads.list(seq["location"] + "/")
-    for key in frames:
-        uploads.delete(key)
-    if isinstance(uploads, LocalBlobStore):
-        _remove_empty(uploads.root / seq["location"])
+    frames = remove_upload(uploads, seq["location"])
     name = file_names(make_args(**seq["spec"]))[1]
     cached = [k for k in results.list(name) if "/" not in k and k.endswith(".json") and is_cache_name(k[:-5], name)]
-    for key in cached:
-        results.delete(key)
-    return {"frames_deleted": len(frames), "cache_deleted": cached}
+    delete_keys(results, cached)
+    return {"frames_deleted": frames, "cache_deleted": cached}

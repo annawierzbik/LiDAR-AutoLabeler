@@ -20,7 +20,7 @@ from argparse import Namespace
 from collections.abc import Callable
 from typing import Protocol
 
-from infra.blob import BlobStore, LocalBlobStore
+from infra.blob import BlobStore
 
 GPU, CPU = "gpu", "cpu"
 
@@ -53,16 +53,19 @@ def results_blobs() -> BlobStore:
 
 
 def export_blobs() -> BlobStore:
-    from pipeline import session_builder
+    from infra.storage import exports_store
 
-    return LocalBlobStore(session_builder.RESULTS_DIR / "exports")
+    return exports_store()
 
 
 # ------------------------------------------------------------------ detect_track
 def detect_track_payload(args) -> dict:
     """The JSON payload of a detect_track job for session-builder arguments."""
-    return {k: getattr(args, k) for k in ("folder", "data_root", "split", "sequence", "start", "stop", "threshold",
-                                         "fov", "use_cache_without_weights")}
+    out = {k: getattr(args, k) for k in ("folder", "data_root", "split", "sequence", "start", "stop", "threshold",
+                                        "fov", "use_cache_without_weights")}
+    if getattr(args, "blob_prefix", None):
+        out["blob_prefix"] = args.blob_prefix
+    return out
 
 
 def detect_track(payload: dict, ctx: TaskContext) -> dict:
@@ -75,7 +78,12 @@ def detect_track(payload: dict, ctx: TaskContext) -> dict:
         track_sequence,
         write_results,
     )
-    from pipeline.session_builder import _find_cached, cache_key_name, file_names
+    from pipeline.session_builder import (
+        _find_cached,
+        cache_key_name,
+        file_names,
+        has_split,
+    )
     from verification import cache
 
     args = Namespace(**payload)
@@ -85,7 +93,7 @@ def detect_track(payload: dict, ctx: TaskContext) -> dict:
     want = range(args.start, stop)
     if len(want) == 0:
         raise ValueError(f"Empty frame range {args.start}..{args.stop} (the sequence has {len(seq)} frames)")
-    meta = current_meta(args.threshold, sequence_mode(seq, args.fov), None if args.folder else args.split)
+    meta = current_meta(args.threshold, sequence_mode(seq, args.fov), args.split if has_split(args) else None)
     if _find_cached(name, want, meta, args.use_cache_without_weights, legacy) is not None:
         ctx.progress(1.0, "found in the detection cache")
         return {"cached": True, "frames": len(want)}

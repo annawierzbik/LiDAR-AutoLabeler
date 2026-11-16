@@ -14,7 +14,7 @@ from pathlib import Path
 from detection.fov import add_fov_argument, sequence_mode
 from ingestion.sequence import SequenceLoader
 from verification import cache
-from verification.paths import RESULTS_DIR, session_file
+from verification.paths import RESULTS_DIR, session_file  # noqa: F401  (RESULTS_DIR: read by infra.storage)
 from verification.session import AnnotationSession
 
 
@@ -24,6 +24,7 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--sequence", default="0000")
     p.add_argument("--folder", default=None,
                    help="any folder with KITTI-style .bin frames (overrides --data-root/--split/--sequence)")
+    p.add_argument("--blob-prefix", default=None, help=argparse.SUPPRESS)   # an upload in the uploads blob area (API)
     p.add_argument("--mode", choices=["assisted", "manual"], default="assisted")
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--stop", type=int, default=None, help="exclusive; default = whole sequence")
@@ -51,7 +52,11 @@ def file_names(args) -> tuple[str, str, str | None]:
     for a KITTI sequence (training/0000 and testing/0000 must not share files). Files written
     before the split was part of the key are named <sequence> only; they are still read for the
     split "training" (the default then), which is the legacy key. The sequence label is what the
-    session stores as its sequence (used for export file names) and does not change."""
+    session stores as its sequence (used for export file names) and does not change. An upload
+    (`blob_prefix`, seq-<random>) is its own label and key: the prefix is unique."""
+    prefix = getattr(args, "blob_prefix", None)
+    if prefix:
+        return prefix, prefix, None
     if args.folder:
         from ingestion.folder import folder_key
 
@@ -67,10 +72,11 @@ def cache_key_name(name: str, indices: range, num_frames: int) -> str:
 
 
 def results_blobs():
-    """The detection + tracking cache: a LocalBlobStore on results/ (keys = file names)."""
-    from infra.blob import LocalBlobStore
+    """The detection + tracking cache (keys = file names): a LocalBlobStore on results/, or the
+    cache area of the S3 bucket (LAL_BLOB_STORE=s3, infra/storage.py)."""
+    from infra.storage import results_store
 
-    return LocalBlobStore(RESULTS_DIR)
+    return results_store()
 
 
 def _cache_candidates(blobs, name: str) -> list[str]:
@@ -99,8 +105,17 @@ def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool
     return want, results[offset: offset + len(want)]
 
 
+def has_split(args) -> bool:
+    """KITTI sequences have a split; folders and uploads do not (it is not part of their cache meta)."""
+    return not (args.folder or getattr(args, "blob_prefix", None))
+
+
 def open_sequence(args):
-    """The SequenceLoader (KITTI) or FolderSequence (--folder) of `args`."""
+    """The SequenceLoader (KITTI), FolderSequence (--folder) or BlobSequence (an upload) of `args`."""
+    if getattr(args, "blob_prefix", None):
+        from infra.sequences import open_blob_sequence
+
+        return open_blob_sequence(args)
     if args.folder:
         from ingestion.folder import FolderSequence
 
@@ -160,7 +175,7 @@ def new_session(args, seq, detect=None) -> AnnotationSession:
     else:
         from pipeline.detect_track import current_meta
 
-        split = None if args.folder else args.split
+        split = args.split if has_split(args) else None
         meta = current_meta(args.threshold, sequence_mode(seq, args.fov), split)
         found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy)
         if found is None and detect is not None:
