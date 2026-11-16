@@ -1,11 +1,13 @@
 """Background jobs.
 
-JobQueue / ThreadJobQueue: submit a function, poll its status, cancel it. The web manager runs its
-short "open a session" jobs this way. Cancelling only works before a job has started.
+JobQueue / ThreadJobQueue: submit a function, poll its status, cancel it. Cancelling only works
+before a job has started. (The web manager used it for openings until phase 4; since then an
+opening is a task, ADR 0017, and nothing in the application uses JobQueue.)
 
 TaskQueue: submit a named task (infra.tasks.TASKS) with a JSON payload; status with progress;
-cooperative cancel. ThreadTaskQueue (the default, LAL_JOB_QUEUE=thread) runs tasks in threads of
-this process; CeleryTaskQueue (infra/celery_queue.py) sends them to worker processes.
+cooperative cancel. ThreadTaskQueue (the default, LAL_JOB_QUEUE=thread; CLI and tests) runs tasks
+in threads of this process; CeleryTaskQueue (infra/celery_queue.py) sends them to worker processes
+(always used by the web API, ADR 0003).
 """
 from __future__ import annotations
 
@@ -157,7 +159,7 @@ class ThreadTaskQueue:
         return job_id
 
     def _run(self, job: JobStatus, payload: dict) -> None:
-        from infra.tasks import JobCancelled
+        from infra.tasks import JobCancelled, TaskFailed
 
         stop = self._stops[job.id]
         with self._mutex:
@@ -170,6 +172,8 @@ class ThreadTaskQueue:
             job.state, job.progress = "done", 1.0
         except JobCancelled as exc:
             job.state, job.message = "cancelled", str(exc) or "cancelled"
+        except TaskFailed as exc:
+            job.error, job.message, job.state = exc, str(exc), "failed"
         except Exception as exc:
             job.error, job.message, job.state = exc, f"{type(exc).__name__}: {exc}", "failed"
             log.exception("Job %s (%s) failed", job.id, job.kind)

@@ -1,6 +1,7 @@
 # 0004 Storage and job protocols with local implementations
 
-Status: accepted (phase 1)
+Status: accepted (phase 1). `SessionManager` was removed in phase 4 (ADR 0017); the lock owner
+is now `u<user id>/<client id>`.
 
 ## Decision
 `infra/` defines typing protocols and local implementations that reproduce the single-process

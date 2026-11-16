@@ -93,7 +93,7 @@ def env(tmp_path, pg_url, pg_engine):
 
 def payload(folder, **kw):
     from infra.tasks import detect_track_payload
-    from web.manager import make_args
+    from pipeline.session_builder import make_args
 
     return detect_track_payload(make_args(folder=str(folder), **kw))
 

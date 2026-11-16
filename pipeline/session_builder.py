@@ -33,6 +33,16 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     add_fov_argument(p)
 
 
+def make_args(**overrides) -> argparse.Namespace:
+    """The arguments of add_arguments with their defaults, plus `overrides`."""
+    parser = argparse.ArgumentParser()
+    add_arguments(parser)
+    args = parser.parse_args([])
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
 def file_names(args) -> tuple[str, str, str | None]:
     """(sequence label, file key, legacy file key) of the sequence in `args`.
 
@@ -100,9 +110,15 @@ def open_sequence(args):
 def session_keys(args) -> tuple[str, str | None]:
     """(key, legacy key) of the session of `args` in a SessionStore: the session file name without
     .json (<file key>[_f<a>-<b>]_<mode>); the legacy key is the name used before the split was part
-    of it (KITTI training sequences only, docs/adr/0006)."""
+    of it (KITTI training sequences only, docs/adr/0006).
+
+    With `args.owner` (a user id, API v1) the key starts with u<owner>_, so every user has their
+    own session of a sequence (docs/adr/0017); such keys have no legacy key."""
     _, name, legacy = file_names(args)
     key = session_file(name, args.mode, args.start, args.stop).stem
+    owner = getattr(args, "owner", None)
+    if owner is not None:
+        return f"u{int(owner)}_{key}", None
     return key, (session_file(legacy, args.mode, args.start, args.stop).stem if legacy else None)
 
 

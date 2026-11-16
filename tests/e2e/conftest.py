@@ -1,5 +1,10 @@
-"""Fixtures for the browser tests: a synthetic sequence, the app server in a subprocess, and a
-check that fails the test on any browser console error."""
+"""Fixtures for the browser tests: the whole stack in processes (API, a Celery worker with fake
+detection, PostgreSQL and Redis of docker-compose.db.yml), users, a synthetic sequence, logging in,
+and a check that fails the test on any browser console error.
+
+    docker compose -f docker-compose.db.yml up -d
+    pytest -m e2e
+"""
 from __future__ import annotations
 
 import os
@@ -15,13 +20,14 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 NUM_FRAMES = 6
+PASSWORD = "e2e password 1234"
+REDIS_URL = os.environ.get("LAL_TEST_E2E_REDIS_URL", "redis://127.0.0.1:56379/6")
+SECRET = "e2e-secret-0123456789abcdef0123456789abcdef"
 
 
-@pytest.fixture
-def sequence_dir(tmp_path) -> Path:
-    """A folder with NUM_FRAMES small random point clouds (x, y, z, intensity as float32)."""
-    folder = tmp_path / "drive"
-    folder.mkdir()
+def write_sequence(folder: Path) -> Path:
+    """NUM_FRAMES small random point clouds (x, y, z, intensity as float32)."""
+    folder.mkdir(parents=True)
     rng = np.random.default_rng(0)
     for i in range(NUM_FRAMES):
         rng.uniform(-30, 30, (2000, 4)).astype("<f4").tofile(folder / f"{i:06d}.bin")
@@ -34,49 +40,147 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-class AppServer:
-    """The web app (tests/e2e/app_server.py) in its own process; `restart` keeps the results folder."""
+class Proc:
+    """A child process with its output in a log file."""
 
-    def __init__(self, results_dir: Path, env: dict | None = None) -> None:
-        self.results_dir = results_dir
-        self.extra_env = env or {}
+    def __init__(self, args: list[str], env: dict, log: Path) -> None:
+        self.args, self.env, self.log = args, env, log
         self.proc: subprocess.Popen | None = None
-        self.url = ""
 
     def start(self) -> None:
-        port = _free_port()
-        env = {**os.environ, "LAL_RESULTS_DIR": str(self.results_dir),
-               "LAL_WORKER_DETECTOR_FACTORY": "tests.fakes:FakeDetector", **self.extra_env}
-        self.proc = subprocess.Popen([sys.executable, "-m", "tests.e2e.app_server", str(port)],
-                                     cwd=PROJECT_ROOT, env=env)
-        self.url = f"http://127.0.0.1:{port}"
-        deadline = time.time() + 30
+        with self.log.open("ab") as out:
+            self.proc = subprocess.Popen([sys.executable, *self.args], cwd=PROJECT_ROOT, env=self.env, stdout=out,
+                                         stderr=subprocess.STDOUT)
+
+    def wait_http(self, url: str, timeout: float = 40) -> None:
+        deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                urllib.request.urlopen(self.url + "/", timeout=1)
+                urllib.request.urlopen(url, timeout=1)
                 return
             except OSError:
                 if self.proc.poll() is not None:
-                    raise RuntimeError("the app server exited") from None
+                    raise RuntimeError(f"{self.args} exited:\n{self.log.read_text(errors='replace')[-3000:]}") from None
                 time.sleep(0.2)
-        raise RuntimeError("the app server did not start")
+        raise RuntimeError(f"{self.args} did not start")
 
     def stop(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
             self.proc.terminate()
-            self.proc.wait(10)
+            try:
+                self.proc.wait(15)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(5)
+
+
+class AppServer(Proc):
+    """One API process (tests/e2e/app_server.py); `restart` starts a new process on the same port."""
+
+    def __init__(self, env: dict, log: Path) -> None:
+        self.port = _free_port()
+        super().__init__(["-m", "tests.e2e.app_server", str(self.port)], env, log)
+        self.url = f"http://127.0.0.1:{self.port}"
+
+    def start(self) -> None:
+        super().start()
+        self.wait_http(self.url + "/healthz")
 
     def restart(self) -> None:
         self.stop()
         self.start()
 
 
+class Stack:
+    def __init__(self, tmp: Path, pg_url: str, pg_engine, apis: int = 1, proxy: bool = False,
+                 env: dict | None = None) -> None:
+        self.tmp, self.pg_engine = tmp, pg_engine
+        self.results_dir = tmp / "results"
+        self.data_root = tmp / "data"
+        self.env = {**os.environ, "LAL_DATABASE_URL": pg_url, "LAL_REDIS_URL": REDIS_URL, "LAL_JWT_SECRET": SECRET,
+                    "LAL_SESSION_STORE": "postgres", "LAL_JOB_QUEUE": "celery",
+                    "LAL_RESULTS_DIR": str(self.results_dir), "LAL_DATA_ROOT": str(self.data_root),
+                    "LAL_COOKIE_SECURE": "false", "LAL_WORKER_DETECTOR_FACTORY": "tests.fakes:FakeDetector",
+                    "LAL_JOB_HEARTBEAT_SECONDS": "0.3", "PYTHONUNBUFFERED": "1", **(env or {})}
+        self.worker = Proc(["-m", "tests.e2e.worker", "w1"], self.env, tmp / "worker.log")
+        self.apis = [AppServer(self.env, tmp / f"api{i}.log") for i in range(apis)]
+        self.proxy: Proc | None = None
+        self.proxy_url = ""
+        if proxy:
+            port = _free_port()
+            self.proxy = Proc(["-m", "tests.e2e.rr_proxy", str(port), *[a.url for a in self.apis]], self.env,
+                              tmp / "proxy.log")
+            self.proxy_url = f"http://127.0.0.1:{port}"
+
+    @property
+    def url(self) -> str:
+        return self.proxy_url or self.apis[0].url
+
+    def start(self) -> Stack:
+        import redis
+
+        redis.Redis.from_url(REDIS_URL).flushdb()
+        self.worker.start()
+        for a in self.apis:
+            a.start()
+        if self.proxy is not None:
+            self.proxy.start()
+            self.proxy.wait_http(self.proxy_url + "/healthz")
+        return self
+
+    def stop(self) -> None:
+        for p in [self.proxy, *self.apis, self.worker]:
+            if p is not None:
+                p.stop()
+
+    def proxy_hits(self) -> list[int]:
+        import json
+
+        return json.loads(urllib.request.urlopen(self.proxy_url + "/__proxy_stats").read())["hits"]
+
+    # ------------------------------------------------------------- data
+    def user(self, name: str, role: str = "annotator") -> int:
+        from infra.auth import UserStore
+
+        return UserStore(self.pg_engine).create(name, PASSWORD, role).id
+
+    def sequence(self, owner: int, name: str = "drive") -> int:
+        from infra.sequence_store import SequenceStore
+
+        folder = write_sequence(self.data_root / f"{name}_{owner}")
+        return SequenceStore(self.pg_engine).add(name, "folder", str(folder), {"folder": str(folder)}, NUM_FRAMES,
+                                                 owner)["id"]
+
+
 @pytest.fixture
-def server(tmp_path):
-    srv = AppServer(tmp_path / "results")
-    srv.start()
-    yield srv
-    srv.stop()
+def make_stack(tmp_path, pg_url, pg_engine):
+    stacks: list[Stack] = []
+
+    def make(**kw) -> Stack:
+        s = Stack(tmp_path, pg_url, pg_engine, **kw).start()
+        stacks.append(s)
+        return s
+
+    yield make
+    for s in stacks:
+        s.stop()
+
+
+@pytest.fixture
+def stack(make_stack):
+    """The stack with user anna (annotator), who owns the sequence "drive"."""
+    s = make_stack()
+    s.anna = s.user("anna")
+    s.drive = s.sequence(s.anna)
+    return s
+
+
+def login(page, stack: Stack, username: str = "anna") -> None:
+    page.goto(stack.url + "/login")
+    page.fill("#username", username)
+    page.fill("#password", PASSWORD)
+    page.click("#login")
+    page.wait_for_url(stack.url + "/")
 
 
 class ConsoleErrors:
@@ -107,21 +211,25 @@ class ConsoleErrors:
                 left[hit] -= 1
         return out + [f"expected console error containing {k!r} did not happen" for k, n in left.items() if n > 0]
 
+    def guard(self, context) -> None:
+        """Watch every page of a browser context and block requests outside 127.0.0.1."""
+        context.on("page", self.watch)
+
+        def offline(route):                      # the page must not need the internet (vendored assets)
+            if route.request.url.startswith("http://127.0.0.1:"):
+                route.continue_()
+            else:
+                self.errors.append(f"external request: {route.request.url}")
+                route.abort()
+
+        context.route("**/*", offline)
+
 
 @pytest.fixture
 def console_errors(page, context):
     errors = ConsoleErrors()
     errors.watch(page)
-    context.on("page", errors.watch)            # pages opened later (a second tab)
-
-    def offline(route):                          # the page must not need the internet (vendored assets)
-        if route.request.url.startswith("http://127.0.0.1:"):
-            route.continue_()
-        else:
-            errors.errors.append(f"external request: {route.request.url}")
-            route.abort()
-
-    context.route("**/*", offline)
+    errors.guard(context)
     yield errors
     bad = errors.unexpected()
     assert bad == [], "browser console errors:\n" + "\n".join(bad)

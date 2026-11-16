@@ -16,7 +16,7 @@ import time
 import uuid
 from collections.abc import Callable
 
-from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy import and_, func, insert, or_, select, update
 from sqlalchemy.engine import Engine
 
 from infra.db import JobRow
@@ -43,9 +43,40 @@ class PgJobStore:
                 return old, False
             job_id = uuid.uuid4().hex[:12]
             c.execute(insert(JobRow).values(id=job_id, kind=kind, queue=queue, title=title, state="queued",
-                                            progress=0.0, message="", cache_key=dedupe,
+                                            progress=0.0, message="", cache_key=dedupe, owner_id=payload.get("owner_id"),
                                             payload={**payload, "job_id": job_id}))
             return job_id, True
+
+    VIEW = (JobRow.id, JobRow.kind, JobRow.title, JobRow.state, JobRow.progress, JobRow.message, JobRow.result,
+            JobRow.attempts, JobRow.owner_id, JobRow.created_at, JobRow.finished_at)
+
+    @staticmethod
+    def _view(r) -> dict:
+        return {"id": r.id, "kind": r.kind, "title": r.title, "state": r.state, "progress": r.progress,
+                "message": r.message, "result": r.result, "attempts": r.attempts, "owner_id": r.owner_id,
+                "created_at": r.created_at.isoformat(),
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None}
+
+    def view(self, job_id: str, owner_id: int | None = None) -> dict:
+        """The job as the API shows it; KeyError if it does not exist or (with `owner_id`) is not
+        that user's."""
+        q = select(*self.VIEW).where(JobRow.id == job_id)
+        if owner_id is not None:
+            q = q.where(JobRow.owner_id == owner_id)
+        with self.engine.connect() as c:
+            r = c.execute(q).first()
+        if r is None:
+            raise KeyError(job_id)
+        return self._view(r)
+
+    def page(self, owner_id: int | None, limit: int, offset: int) -> tuple[list[dict], int]:
+        """Newest first; `owner_id` None: every user's jobs."""
+        cond = [] if owner_id is None else [JobRow.owner_id == owner_id]
+        with self.engine.connect() as c:
+            total = c.execute(select(func.count()).select_from(JobRow).where(*cond)).scalar()
+            rows = c.execute(select(*self.VIEW).where(*cond).order_by(JobRow.created_at.desc(), JobRow.id)
+                             .limit(limit).offset(offset)).all()
+        return [self._view(r) for r in rows], total
 
     def status(self, job_id: str) -> JobStatus:
         with self.engine.connect() as c:

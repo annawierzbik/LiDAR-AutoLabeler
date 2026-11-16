@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in - LiDAR AutoLabeler</title>
+<link href="/static/vendor/schibsted-grotesk/font.css" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0a0d10; --raised:#1a2027; --line:#242d36; --line-strong:#3a4753; --text:#dde4ea; --muted:#7f8c99; --bad-text:#ffb3b3;
+    font-family:"Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-size:18px; line-height:1.5; }
+  main { max-width:420px; margin:0 auto; padding:14vh 24px 40px; }
+  h1 { font-size:40px; line-height:1.1; margin:0 0 8px; letter-spacing:-.015em; }
+  p { color:var(--muted); margin:0 0 32px; }
+  label { display:block; font-size:16px; color:var(--muted); margin:18px 0 6px; }
+  input { width:100%; font:inherit; color:inherit; background:#0e1216; border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  button { margin-top:26px; width:100%; font:inherit; font-weight:600; background:var(--text); color:#0a0d10; border:1px solid var(--text); border-radius:8px; padding:13px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  input:focus-visible, button:focus-visible { outline:2px solid var(--text); outline-offset:2px; }
+  #msg { margin-top:16px; min-height:1.5em; color:var(--bad-text); font-size:16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>LiDAR AutoLabeler</h1>
+  <p>Log in to review your sequences.</p>
+  <form id="form">
+    <label for="username">User name</label>
+    <input id="username" name="username" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button id="login" type="submit">Log in</button>
+    <div id="msg" role="alert"></div>
+  </form>
+</main>
+<script type="module">
+const $ = id => document.getElementById(id);
+// only a path on this site (no "//host" or "http:" redirects)
+function nextPage() {
+  const n = new URLSearchParams(location.search).get('next') || '/';
+  return n.startsWith('/') && !n.startsWith('//') ? n : '/';
+}
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  $('login').disabled = true; $('msg').textContent = '';
+  try {
+    const r = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('username').value, password: $('password').value }) });
+    if (r.ok) { location.href = nextPage(); return; }
+    let m = r.statusText; try { m = (await r.json()).error.message; } catch (err) {}
+    $('msg').textContent = m.charAt(0).toUpperCase() + m.slice(1) + '.';
+  } catch (err) { $('msg').textContent = 'Cannot reach the server.'; }
+  $('login').disabled = false;
+};
+$('username').focus();
+</script>
+</body>
+</html>

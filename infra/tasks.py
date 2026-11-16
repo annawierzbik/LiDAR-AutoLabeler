@@ -1,8 +1,12 @@
 """Background tasks, independent of the queue that runs them (ThreadTaskQueue or Celery workers).
 
 Each task is `fn(payload: dict, ctx: TaskContext) -> dict` (JSON-able result):
-    detect_track   gpu queue: detection + tracking of a sequence into the detection cache
-    export         cpu queue: label files of a session as a zip in the export BlobStore
+    detect_track         gpu queue: detection + tracking of a sequence into the detection cache
+    open_session         gpu queue: build (or resume) a user's session of a sequence; detection +
+                         tracking first when the cache has no result (API v1, docs/adr/0017)
+    open_session_manual  cpu queue: the same for manual mode (no detector)
+    export               cpu queue: label files of a session as a zip in the export BlobStore,
+                         deleted after LAL_EXPORT_TTL_HOURS
 
 Tasks are idempotent (docs/adr/0015): detect_track first looks for a cache entry with the run's
 settings and returns it without loading a model; a run that is stopped (cancelled, or its worker
@@ -35,6 +39,10 @@ class TaskContext(Protocol):
 
 class JobCancelled(Exception):
     pass
+
+
+class TaskFailed(Exception):
+    """A failure whose message is meant for the user as it is (no exception class name)."""
 
 
 def results_blobs() -> BlobStore:
@@ -99,30 +107,99 @@ def detect_track(payload: dict, ctx: TaskContext) -> dict:
     return {"cached": False, "frames": len(want), "cache_key": key}
 
 
+# ------------------------------------------------------------------ open_session
+def open_session_payload(spec: dict, owner_id: int, sequence_id: int, tab_id: str, mode: str = "assisted",
+                         start: int = 0, stop: int | None = None) -> dict:
+    """Payload of an open_session(_manual) job: session-builder arguments of the sequence `spec`."""
+    from pipeline.session_builder import make_args
+
+    args = make_args(**spec, mode=mode, start=start, stop=stop)
+    return {"args": vars(args), "owner_id": owner_id, "sequence_id": sequence_id, "tab_id": tab_id}
+
+
+def open_session_kind(mode: str) -> str:
+    return "open_session_manual" if mode == "manual" else "open_session"
+
+
+def open_session(payload: dict, ctx: TaskContext) -> dict:
+    """Make sure the owner's session of the sequence exists (resume, cached detections, or
+    detection + tracking right here, in this job) and return what a request needs to serve it."""
+    from infra.settings import make_session_store
+    from pipeline.session_builder import prepare
+
+    args = Namespace(**payload["args"], owner=payload["owner_id"])
+    store = make_session_store()
+
+    def detect(a) -> None:
+        detect_track(detect_track_payload(a), ctx)
+
+    if ctx.should_stop():
+        raise JobCancelled("cancelled")
+    try:
+        _, key = prepare(args, store, detect)
+    except (FileNotFoundError, ValueError) as exc:
+        raise TaskFailed(str(exc)) from None
+    if hasattr(store, "set_owner"):
+        store.set_owner(key, payload["owner_id"], payload["sequence_id"])
+    s = store.load(key)
+    ctx.progress(1.0, "ready")
+    return {"session_key": key, "num_frames": s.num_frames, "frame_offset": s.frame_offset,
+            "sequence": s.sequence}
+
+
 # ------------------------------------------------------------------------ export
+def export_key(expires_at: float, job_id: str, archive_name: str) -> str:
+    """Export blobs are named <expiry, epoch seconds>/<job id>/<archive>, so expired ones are found
+    and deleted without a database."""
+    return f"{int(expires_at)}/{job_id}/{archive_name}"
+
+
+def prune_exports(blobs: BlobStore, now: float) -> list[str]:
+    """Delete the export blobs whose expiry has passed; returns their keys."""
+    gone = []
+    for key in blobs.list():
+        head = key.split("/", 1)[0]
+        if head.isdigit() and int(head) <= now:
+            blobs.delete(key)
+            gone.append(key)
+    return gone
+
+
 def export(payload: dict, ctx: TaskContext) -> dict:
     """payload: session_key, revision (so an export of an older state is not reused), sequence
-    (session-builder arguments), format, include_unreviewed, include_empty, job_id."""
-    from export import export_session, zip_files
-    from infra.settings import make_session_store
+    (session-builder arguments), format, include_unreviewed, include_empty, job_id.
+    The zip is kept for LAL_EXPORT_TTL_HOURS; every export run deletes the expired ones."""
+    import time
+
+    from export import ExportError, export_session, zip_files
+    from infra.settings import get_settings, make_session_store
     from pipeline.session_builder import open_sequence
 
+    blobs = export_blobs()
+    now = time.time()
+    prune_exports(blobs, now)
     session = make_session_store().load(payload["session_key"])
     seq = open_sequence(Namespace(**payload["sequence"]))
     ctx.progress(0.2, "rendering labels")
-    result = export_session(session, seq, payload["format"], payload.get("include_unreviewed", False),
-                            payload.get("include_empty", False))
+    try:
+        result = export_session(session, seq, payload["format"], payload.get("include_unreviewed", False),
+                                payload.get("include_empty", False))
+    except ExportError as exc:
+        raise TaskFailed(str(exc)) from None
     if ctx.should_stop():
         raise JobCancelled("export cancelled")
     data = zip_files(result.files)
-    key = f"{payload['job_id']}/{result.archive_name}"
-    export_blobs().put(key, data)
-    return {"blob": key, "archive_name": result.archive_name, "bytes": len(data),
+    expires_at = now + get_settings().export_ttl_hours * 3600
+    key = export_key(expires_at, payload["job_id"], result.archive_name)
+    blobs.put(key, data)
+    return {"blob": key, "archive_name": result.archive_name, "bytes": len(data), "expires_at": int(expires_at),
             "summary": result.summary.to_dict()}
 
 
 TASKS: dict[str, tuple[str, Callable[[dict, TaskContext], dict]]] = {
     "detect_track": (GPU, detect_track),
+    "open_session": (GPU, open_session),
+    "open_session_manual": (CPU, open_session),
     "export": (CPU, export),
 }
 

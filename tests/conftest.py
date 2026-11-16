@@ -50,7 +50,7 @@ def pg_engine(pg_url):
     engine = make_engine(pg_url)
     yield engine
     with engine.begin() as c:
-        c.execute(text("TRUNCATE session_events, sessions, jobs, sequences, users RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE tabs, session_events, sessions, jobs, sequences, users RESTART IDENTITY CASCADE"))
     engine.dispose()
 
 

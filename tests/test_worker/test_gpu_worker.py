@@ -33,7 +33,7 @@ def test_real_detector_through_a_gpu_worker(tmp_path, pg_url, pg_engine):
     from infra.celery_queue import CeleryTaskQueue
     from infra.pg_jobs import PgJobStore
     from infra.tasks import detect_track_payload
-    from web.manager import make_args
+    from pipeline.session_builder import make_args
 
     if not (DATA / "training" / "velodyne" / "0000").is_dir() or not detection.paths.DEFAULT_CKPT.exists():
         pytest.skip("KITTI tracking data or the checkpoint is missing")

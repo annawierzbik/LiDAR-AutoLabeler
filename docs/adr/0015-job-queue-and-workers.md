@@ -12,11 +12,13 @@ Status: accepted (phase 3)
   - `celery`: `CeleryTaskQueue`; the broker message carries only the job id; payload, state,
     progress, attempts, result and error are rows of the `jobs` table (`infra/pg_jobs.py`, migration
     0003). Needs `LAL_REDIS_URL` and `LAL_DATABASE_URL`. Redis runs in `docker-compose.db.yml`.
-- **Opening a session** still runs as a short local job of the web manager; when the session needs
-  detection, that job submits `detect_track` and waits for it, so the start page shows the task's
-  progress and a Cancel button (`POST /api/jobs/<sid>/cancel`). Exports can run as tasks
-  (`POST /api/s/<sid>/export_jobs`, `GET /api/tasks/<id>`, `GET /api/tasks/<id>/download`); the
-  annotation page keeps its direct download for now.
+- **Opening a session** (phase 4, ADR 0017) is itself a job: `open_session` (gpu queue) or
+  `open_session_manual` (cpu queue) builds or resumes the session on the worker, running detection
+  + tracking inside the same job when the cache has no result, so the start page shows its
+  progress and a Cancel button (`POST /api/v1/tabs/<sid>/cancel`). Exports run only as tasks
+  (`POST /api/v1/tabs/<sid>/exports`, `GET /api/v1/jobs/<id>`, `GET /api/v1/jobs/<id>/download`,
+  ADR 0018). Before phase 4 an opening was a thread of the API process that waited for a
+  `detect_track` job.
 - **One detector per GPU worker process** (`infra/worker_detector.py`): a process loads the configuration
   of `LAL_WORKER_DETECTOR_*` (config, checkpoint, score threshold, factory) once, on its first job.
   A job whose cache metadata needs another configuration fails with a message naming both; it never
@@ -49,5 +51,6 @@ Windows); start more cpu workers for more parallel exports. Linux containers fol
 - With `LAL_JOB_QUEUE=thread` every detection job makes a detector with its own configuration
   (including its score threshold) and releases it afterwards, as before the queue existed; only GPU
   worker processes keep a model loaded (and only that one configuration).
-- The web manager's opening job waits in an API thread; if the API restarts meanwhile, the
-  detection still finishes in the worker and a new opening finds it in the cache.
+- Since phase 4 the web API always uses `celery` (ADR 0003); `thread` serves the CLI and tests. An
+  API restart does not affect an opening: the job runs on the worker and the page keeps polling
+  the tab (ADR 0017).

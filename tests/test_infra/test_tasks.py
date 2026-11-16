@@ -41,7 +41,7 @@ def env(tmp_path, monkeypatch):
 
 
 def payload(folder, **kw):
-    from web.manager import make_args
+    from pipeline.session_builder import make_args
 
     return detect_track_payload(make_args(folder=str(folder), **kw))
 
@@ -185,7 +185,7 @@ def test_export_task_makes_a_zip(env, tmp_path):
                                                   for _ in range(FRAMES)])
     s.accept_track(0)
     store.create("k", s)
-    from web.manager import make_args
+    from pipeline.session_builder import make_args
 
     q = ThreadTaskQueue(background=False)
     pl = {"session_key": "k", "revision": 1, "sequence": vars(make_args(folder=str(env.folder))),
@@ -195,42 +195,91 @@ def test_export_task_makes_a_zip(env, tmp_path):
     with mock.patch("infra.settings.make_session_store", return_value=store):
         st = q.status(q.submit("export", pl))
     assert st.state == "done" and st.result["summary"]["frames"] == FRAMES
+    assert st.result["blob"].split("/")[0] == str(st.result["expires_at"])       # <expiry>/<job id>/<name>
     data = (env.results / "exports" / st.result["blob"]).read_bytes()
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         assert len([n for n in z.namelist() if n.startswith("labels/")]) == FRAMES
 
 
-def test_manager_opens_a_folder_through_the_task_queue(env, tmp_path):
+def open_payload(env, owner=3, mode="assisted"):
+    from infra.tasks import open_session_payload
+
+    return open_session_payload({"folder": str(env.folder)}, owner, 1, "tab1", mode)
+
+
+def test_open_session_builds_the_owners_session(env):
+    from unittest import mock
+
     from infra.sessions import FileSessionStore
-    from web.manager import SessionManager
 
-    q = ThreadTaskQueue(background=True)
-    mgr = SessionManager(background=False, store=FileSessionStore(env.results / "sessions"), tasks=q,
-                         poll_seconds=0.01)
-    sid = mgr.open_folder(str(env.folder))
-    assert mgr.job(sid).status == "ready" and mgr.job(sid).task_id is not None
-    assert q.status(mgr.job(sid).task_id).state == "done"
-    st = mgr.service(sid).state(0)
-    assert st["num_frames"] == FRAMES and st["stats"]["total"] > 0
+    store = FileSessionStore(env.results / "sessions")
+    q = ThreadTaskQueue(background=False)
+    with mock.patch("infra.settings.make_session_store", return_value=store):
+        st = q.status(q.submit("open_session", open_payload(env)))
+    assert st.state == "done", st.message
+    assert st.result["session_key"].startswith("u3_") and st.result["num_frames"] == FRAMES
+    assert store.load(st.result["session_key"]).stats()["total"] == FRAMES      # one fake car per frame
+    assert len(cache_files(env.results)) == 1 and tests.fakes.LOADS == 1
+    with mock.patch("infra.settings.make_session_store", return_value=store):   # another user: own session
+        other = q.status(q.submit("open_session", open_payload(env, owner=4)))
+    assert other.result["session_key"].startswith("u4_") and tests.fakes.LOADS == 1   # detection cached
 
 
-def test_manager_cancels_the_detection_of_an_opening(env, monkeypatch):
+def test_open_session_manual_needs_no_detector(env):
+    from unittest import mock
+
     from infra.sessions import FileSessionStore
-    from web.manager import SessionManager
+    from infra.tasks import TASKS, open_session_kind
+
+    store = FileSessionStore(env.results / "sessions")
+    assert open_session_kind("manual") == "open_session_manual" and TASKS["open_session_manual"][0] == "cpu"
+    q = ThreadTaskQueue(background=False)
+    with mock.patch("infra.settings.make_session_store", return_value=store):
+        st = q.status(q.submit("open_session_manual", open_payload(env, mode="manual")))
+    assert st.state == "done" and store.load(st.result["session_key"]).stats()["total"] == 0
+    assert tests.fakes.LOADS == 0 and cache_files(env.results) == []
+
+
+def test_open_session_of_a_bad_folder_fails_with_a_readable_message(env, tmp_path):
+    from unittest import mock
+
+    from infra.sessions import FileSessionStore
+    from infra.tasks import open_session_payload
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    q = ThreadTaskQueue(background=False)
+    with mock.patch("infra.settings.make_session_store", return_value=FileSessionStore(env.results / "s")):
+        st = q.status(q.submit("open_session", open_session_payload({"folder": str(empty)}, 1, 1, "t")))
+    assert st.state == "failed" and st.message.startswith("No .bin point cloud files")
+
+
+def test_open_session_cancel_discards_the_partial_detection(env, monkeypatch):
+    from unittest import mock
+
+    from infra.sessions import FileSessionStore
 
     monkeypatch.setenv("LAL_FAKE_DETECTOR_DELAY", "0.05")
     q = ThreadTaskQueue(background=True)
-    mgr = SessionManager(background=True, store=FileSessionStore(env.results / "sessions"), tasks=q,
-                         poll_seconds=0.01)
-    sid = mgr.open_folder(str(env.folder))
-    deadline = time.time() + 10
-    while not (mgr.job(sid).progress and mgr.job(sid).progress["fraction"] > 0.1):
-        assert time.time() < deadline
-        time.sleep(0.01)
-    assert mgr.job(sid).view()["progress"]["state"] == "running"
-    assert mgr.cancel(sid) is True
-    while mgr.job(sid).status == "loading":
-        assert time.time() < deadline
-        time.sleep(0.01)
-    assert mgr.job(sid).status == "error" and mgr.job(sid).message == "cancelled"
-    assert cache_files(env.results) == []
+    with mock.patch("infra.settings.make_session_store", return_value=FileSessionStore(env.results / "sessions")):
+        jid = q.submit("open_session", open_payload(env))
+        deadline = time.time() + 10
+        while q.status(jid).progress < 0.1:
+            assert time.time() < deadline
+            time.sleep(0.01)
+        assert q.cancel(jid) is True
+        st = wait(q, jid)
+    assert st.state == "cancelled" and cache_files(env.results) == []
+
+
+def test_expired_exports_are_pruned(tmp_path):
+    from infra.blob import LocalBlobStore
+    from infra.tasks import export_key, prune_exports
+
+    blobs = LocalBlobStore(tmp_path)
+    old, new = export_key(1000.9, "j1", "a.zip"), export_key(5000, "j2", "b.zip")
+    assert old == "1000/j1/a.zip"
+    for k in (old, new):
+        blobs.put(k, b"zip")
+    assert prune_exports(blobs, now=2000) == [old]
+    assert blobs.list() == [new]

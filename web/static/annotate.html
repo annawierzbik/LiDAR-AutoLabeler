@@ -199,7 +199,8 @@
           </label>
           <label class="check small muted"><input type="checkbox" id="expUnrev"> Include frames that still have boxes to review</label>
           <label class="check small muted" id="expEmptyRow"><input type="checkbox" id="expEmpty"> Include frames without boxes</label>
-          <div id="expInfo" class="small" role="status">Open this section to see what would be exported.</div>
+          <button id="expRun">Export</button>
+          <div id="expInfo" class="small" role="status">Export makes a .zip on the server; it can be downloaded for a while.</div>
           <a id="expGo" class="btn" href="#" download aria-disabled="true">Download .zip</a>
         </div>
       </details>
@@ -237,6 +238,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { api as call, getJson, postJson, loggedIn, toLogin } from '/static/client.js';
 
 const COLORS = { pending:0xffa600, accepted:0x40ff40, edited:0x33e6ff, manual:0xff4dff, interpolated:0xbf8cff, rejected:0x8c2626 };
 const SELECTED = 0xffffff;
@@ -313,15 +315,10 @@ function toast(msg) {
 
 const SID = new URLSearchParams(location.search).get('sid');
 if (!SID) location.href = '/';
-const API = '/api/s/' + SID;
-async function api(path, body) {
-  const r = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) } : undefined);
-  if (!r.ok) {
-    let m = await r.text(); try { m = JSON.parse(m).detail || m; } catch (e) {}
-    const err = new Error(m); err.status = r.status; throw err;
-  }
-  return r;
-}
+if (!loggedIn()) toLogin();
+const API = '/api/v1/tabs/' + SID;
+// GET, or POST with a JSON body; errors carry status, code and message (client.js)
+const api = (path, body) => call(path, body ? { json: body } : {});
 // a server action on the shown frame; returns the new state (already shown) or null on error
 async function act(name, extra = {}) {
   try {
@@ -330,7 +327,7 @@ async function act(name, extra = {}) {
     return s;
   } catch (e) {
     toast('Error: ' + e.message);
-    if (e.status === 409 && /changed elsewhere/.test(e.message)) reloadFrame();   // revision conflict: show what is stored now
+    if (e.code === 'revision_conflict') reloadFrame();   // changed elsewhere: show what is stored now
     return null;
   }
 }
@@ -648,34 +645,51 @@ setInterval(() => api(API + '/heartbeat', {}).catch(e => toast('Error: ' + e.mes
 $('play').onclick = e => { setPlaying(!playing); if (e.detail > 0) e.currentTarget.blur(); };
 
 // --------------------------------------------------------------------- export
-let exportTimer = null;
-function exportQuery() {
-  return new URLSearchParams({ format: $('expFmt').value, include_unreviewed: $('expUnrev').checked, include_empty: $('expEmpty').checked });
-}
-function describeExport(r) {
-  const go = $('expGo'), info = $('expInfo');
-  go.href = `${API}/export?${exportQuery()}`;
-  if (!r.available) { info.textContent = r.reason; go.setAttribute('aria-disabled', 'true'); return; }
-  const s = r.summary;
+// An export is a job on the cpu queue: submit, show its progress, then the summary and a link to
+// the stored zip (kept on the server for LAL_EXPORT_TTL_HOURS).
+let exportRun = 0;
+function describeExport(s) {
   const classes = Object.entries(s.per_class).map(([k, v]) => `${v} ${k}`).join(', ');
-  let text = s.frames ? `${s.frames} frames with ${s.boxes} boxes (${classes}).` : 'Nothing to export yet: no frame is fully reviewed.';
+  let text = s.frames ? `${s.frames} frames with ${s.boxes} boxes (${classes}).` : 'Nothing exported: no frame is fully reviewed.';
   const left = [];
   if (s.skipped_unreviewed) left.push(`${s.skipped_unreviewed} frames that still have boxes to review`);
   if (s.skipped_empty) left.push(`${s.skipped_empty} frames without boxes`);
   if (s.skipped_outside_view) left.push(`${s.skipped_outside_view} boxes outside the camera view`);
   if (left.length) text += ' Left out: ' + left.join(', ') + '.';
-  info.textContent = text;
-  go.setAttribute('aria-disabled', s.frames ? 'false' : 'true');
+  return text;
 }
-async function refreshExport() {
-  if (!$('exp').open) return;
+function resetExport() {
+  exportRun++;
   $('expEmptyRow').style.display = $('expFmt').value === 'lidar' ? '' : 'none';
-  try { describeExport(await (await api(`${API}/export/preview?${exportQuery()}`)).json()); }
-  catch (e) { $('expInfo').textContent = 'Could not check the export: ' + e.message; $('expGo').setAttribute('aria-disabled', 'true'); }
+  $('expGo').setAttribute('aria-disabled', 'true'); $('expGo').href = '#';
+  $('expInfo').textContent = 'Export makes a .zip on the server; it can be downloaded for a while.';
+  $('expRun').disabled = false;
 }
-function scheduleExport() { if ($('exp').open) { clearTimeout(exportTimer); exportTimer = setTimeout(refreshExport, 400); } }
-$('exp').addEventListener('toggle', refreshExport);
-for (const id of ['expFmt', 'expUnrev', 'expEmpty']) $(id).addEventListener('change', refreshExport);
+async function runExport() {
+  const run = ++exportRun, info = $('expInfo');
+  $('expRun').disabled = true; $('expGo').setAttribute('aria-disabled', 'true');
+  info.textContent = 'Exporting...';
+  try {
+    const { job_id } = await postJson(API + '/exports', { format: $('expFmt').value, include_unreviewed: $('expUnrev').checked, include_empty: $('expEmpty').checked });
+    for (;;) {
+      const j = await getJson('/api/v1/jobs/' + job_id);
+      if (run !== exportRun) return;                        // the options changed meanwhile
+      if (j.state === 'done') {
+        info.textContent = describeExport(j.result.summary);
+        if (j.result.summary.frames) { $('expGo').href = `/api/v1/jobs/${job_id}/download`; $('expGo').setAttribute('aria-disabled', 'false'); }
+        break;
+      }
+      if (j.state === 'failed' || j.state === 'cancelled') { info.textContent = 'Export failed: ' + j.message; break; }
+      info.textContent = j.state === 'queued' ? 'Waiting for a free worker...' : `Exporting: ${Math.round(j.progress * 100)}%`;
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch (e) { if (run === exportRun) info.textContent = 'Could not export: ' + e.message; }
+  if (run === exportRun) $('expRun').disabled = false;
+}
+function scheduleExport() { if ($('expGo').getAttribute('aria-disabled') === 'false') resetExport(); }   // the labels changed
+$('expRun').onclick = runExport;
+$('exp').addEventListener('toggle', () => { $('expEmptyRow').style.display = $('expFmt').value === 'lidar' ? '' : 'none'; });
+for (const id of ['expFmt', 'expUnrev', 'expEmpty']) $(id).addEventListener('change', resetExport);
 
 $('home').onclick = () => { location.href = '/'; };
 $('finish').onclick = async () => {

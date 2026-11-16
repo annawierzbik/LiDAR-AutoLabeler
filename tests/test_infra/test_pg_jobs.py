@@ -101,7 +101,7 @@ def test_celery_queue_sends_new_jobs_and_resends_lost_ones(jobs):
     sent = []
     q = CeleryTaskQueue(store, send=lambda job_id, queue: sent.append((job_id, queue)))
     from infra.tasks import detect_track_payload
-    from web.manager import make_args
+    from pipeline.session_builder import make_args
 
     p = detect_track_payload(make_args(folder="D:/x"))
     job = q.submit("detect_track", p, "x")

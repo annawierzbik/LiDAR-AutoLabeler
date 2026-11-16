@@ -26,7 +26,7 @@ Data Ingestion → Detection → Tracking & Association → Annotation Verificat
 | Data Ingestion | `ingestion/` | Wczytywanie surowych chmur punktów, kalibracji i timestampów KITTI |
 | Detection | `detection/` | Detekcja obiektów 3D (PointPillars, OpenPCDet), fine-tuning na KITTI |
 | Tracking & Association | `tracking/` | Filtr Kalmana + metoda węgierska (tracking-by-detection) |
-| Annotation Verification | `verification/`, `web/` | Sesja weryfikacji (decyzje, edycja, cofanie, interpolacja) i interfejs w przeglądarce |
+| Annotation Verification | `verification/`, `web/`, `api/` | Sesja weryfikacji (decyzje, edycja, cofanie, interpolacja) i interfejs w przeglądarce |
 | Prediction Export | `export/` | Eksport etykiet do formatu KITTI |
 
 ## Struktura repozytorium
@@ -37,7 +37,8 @@ lidar-auto-annotation/
 ├── detection/           # Detection Module (PointPillars + fine-tuning)
 ├── tracking/             # Tracking & Association Module (Kalman + Hungarian)
 ├── verification/         # Annotation Verification Module (sesja, reguły edycji, cache)
-├── web/                  # Interfejs w przeglądarce (FastAPI + three.js)
+├── api/                  # API v1 (FastAPI): logowanie, sekwencje, karty, zadania, health
+├── web/                  # Strony w przeglądarce (three.js) i ReviewService
 ├── pipeline/             # Detekcja + tracking sekwencji, budowanie sesji
 ├── infra/                # Magazyn sesji i plików, kolejka zadań, ustawienia (LAL_*)
 ├── export/               # Prediction Export Module (format KITTI)
@@ -61,8 +62,9 @@ OpenPCDet wymaga dodatkowej, osobnej instalacji (kompilacja rozszerzeń CUDA) �
 
 ## Uruchomienie
 
+Narzędzia wiersza poleceń działają bez bazy i kolejki:
+
 ```bash
-python -m scripts.web                        # interfejs w przeglądarce: http://127.0.0.1:8000
 python -m scripts.track_sequence --sequence 0000   # detekcja + tracking sekwencji KITTI do pliku cache
 python -m scripts.export_labels --session results/sessions/<plik>.json --folder <folder z .bin>
 ```
@@ -70,42 +72,54 @@ python -m scripts.export_labels --session results/sessions/<plik>.json --folder 
 Aplikacja desktopowa (okno Open3D) została usunięta; jedynym interfejsem jest przeglądarka
 (`docs/adr/0009-remove-desktop-application.md`).
 
-### Sesje w PostgreSQL (opcjonalnie)
+### Interfejs w przeglądarce (API v1)
 
-Domyślnie sesje są plikami w `results/sessions/`. Baza PostgreSQL działa w Dockerze:
+Serwer WWW zawsze korzysta z PostgreSQL, Redisa i workerów Celery (oba serwisy są w
+`docker-compose.db.yml`). Sesja jest budowana przez workera, eksport też jest zadaniem kolejki.
+Na Windows workery działają z pulą `solo`:
 
 ```bash
-docker compose -f docker-compose.db.yml up -d          # start bazy (port 55432 na localhost)
+docker compose -f docker-compose.db.yml up -d          # PostgreSQL (port 55432) i Redis (port 56379)
 export LAL_DATABASE_URL=postgresql+psycopg://lal:lal_local@127.0.0.1:55432/lal
+export LAL_REDIS_URL=redis://127.0.0.1:56379/0
+export LAL_SESSION_STORE=postgres LAL_JOB_QUEUE=celery
+export LAL_JWT_SECRET=<losowy ciąg, co najmniej 32 znaki>
+export LAL_COOKIE_SECURE=false                         # tylko lokalnie, bez TLS (http)
+export LAL_DATA_ROOT=/dane/lidar                       # foldery, które admin może zarejestrować
 python -m infra.migrate                                # migracje Alembic (schemat)
-python -m scripts.import_sessions                      # jednorazowy import sesji z results/sessions/
-LAL_SESSION_STORE=postgres python -m scripts.web       # serwer z sesjami w bazie
+python -m scripts.create_user admin --role admin       # pierwszy administrator (pyta o hasło)
+celery -A infra.celery_app worker -Q gpu -P solo -n gpu@%h    # otwieranie sesji z detekcją (jeden model)
+celery -A infra.celery_app worker -Q cpu -P solo -n cpu@%h    # eksport, sesje ręczne (można uruchomić kilka)
+python -m scripts.web                                  # http://127.0.0.1:8000, logowanie
 docker compose -f docker-compose.db.yml down           # stop (dane zostają; -v usuwa wolumen)
 ```
 
 Hasło `lal_local` dotyczy tylko lokalnego kontenera (inne: zmienna `LAL_DB_PASSWORD` przy starcie).
+Workery potrzebują tych samych zmiennych `LAL_*` co serwer.
 
-### Kolejka zadań i workery (opcjonalnie)
+- Logowanie: role `annotator` i `admin`; hasła jako skróty argon2. Tokeny JWT są wyłącznie w
+  ciasteczkach HttpOnly, żądania zmieniające stan niosą nagłówek CSRF
+  (`docs/adr/0016-auth-tokens-and-csrf.md`). Kolejnych użytkowników dodaje admin
+  (`POST /api/v1/users`) lub `scripts.create_user`.
+- Sekwencje: użytkownik wgrywa archiwum `.zip` z plikami `.bin` (limit rozmiaru, bezpieczne
+  rozpakowanie), admin rejestruje folder leżący pod `LAL_DATA_ROOT` dla wybranego użytkownika
+  (`docs/adr/0003-sequence-sources.md`). Wpisywanie dowolnej ścieżki zostało usunięte.
+- Każdy użytkownik widzi tylko swoje sekwencje, sesje i zadania; admin widzi wszystko
+  (`docs/adr/0017-ownership-tabs-and-session-locks.md`).
+- Dokumentacja API: `/api/v1/docs`; stan: `/healthz` i `/readyz`
+  (`docs/adr/0018-api-v1-conventions.md`). Serwer nie trzyma stanu między żądaniami, więc kilka
+  procesów API może działać za load balancerem.
 
-Domyślnie detekcja i eksport działają w wątkach serwera. Z Celery i Redisem (Redis jest w tym samym
-pliku compose) zadania wykonują osobne procesy; na Windows z pulą `solo`:
-
-```bash
-export LAL_JOB_QUEUE=celery LAL_REDIS_URL=redis://127.0.0.1:56379/0
-export LAL_DATABASE_URL=postgresql+psycopg://lal:lal_local@127.0.0.1:55432/lal
-python -m infra.migrate
-celery -A infra.celery_app worker -Q gpu -P solo -n gpu@%h    # detekcja + tracking (jeden model)
-celery -A infra.celery_app worker -Q cpu -P solo -n cpu@%h    # eksport (można uruchomić kilka)
-python -m scripts.web
-```
+Sesje zapisane wcześniej w plikach można przenieść do bazy: `python -m scripts.import_sessions`
+(nie mają właściciela; widzi je tylko admin).
 
 ### Testy
 
 ```bash
 pytest                                  # testy jednostkowe
 pytest tests/test_experiments           # testy eksperymentów
-pytest -m postgres                      # testy z bazą (wymaga docker-compose.db.yml)
-pytest -m e2e                           # testy w przeglądarce (requirements-dev.txt, Chromium)
+pytest -m postgres                      # testy z bazą, w tym API v1 (wymaga docker-compose.db.yml)
+pytest -m e2e                           # testy w przeglądarce: API, worker, baza, Redis (requirements-dev.txt, Chromium)
 pytest -m worker                        # prawdziwe procesy workerów Celery (Redis + PostgreSQL)
 pytest -m gpu                           # testy z prawdziwym modelem (GPU, OpenPCDet, dane KITTI)
 ```

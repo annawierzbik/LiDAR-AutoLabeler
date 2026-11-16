@@ -97,12 +97,13 @@ class _WorkerContext:
         self._thread.join(self.interval + 5)
 
 
-def run_job(job_id: str, worker: str | None = None) -> str:
-    """Run one job in this process; returns its final state (or "skipped" if it was not queued)."""
-    from infra.tasks import TASKS, JobCancelled
+def run_job(job_id: str, worker: str | None = None, store=None) -> str:
+    """Run one job in this process; returns its final state (or "skipped" if it was not queued).
+    `store`: the PgJobStore (default: the worker's, from LAL_DATABASE_URL)."""
+    from infra.tasks import TASKS, JobCancelled, TaskFailed
     from infra.worker_detector import DetectorMismatch
 
-    store = job_store()
+    store = store or job_store()
     payload = store.start(job_id, worker or f"{socket.gethostname()}")
     if payload is None:
         return "skipped"
@@ -117,7 +118,7 @@ def run_job(job_id: str, worker: str | None = None) -> str:
         ctx.close()
         store.cancelled(job_id, str(exc) or "cancelled")
         return "cancelled"
-    except DetectorMismatch as exc:
+    except (DetectorMismatch, TaskFailed) as exc:
         ctx.close()
         store.fail(job_id, str(exc))
         return "failed"

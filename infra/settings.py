@@ -2,6 +2,8 @@
 
 The defaults reproduce the behaviour before the settings existed: results under <project>/results,
 sessions in results/sessions, the web server on 127.0.0.1:8000, 8 point clouds cached per session.
+The web API (api/app.py) additionally needs LAL_DATABASE_URL, LAL_REDIS_URL, LAL_JWT_SECRET,
+LAL_SESSION_STORE=postgres and LAL_JOB_QUEUE=celery (docs/adr/0003, 0016-0018).
 """
 from __future__ import annotations
 
@@ -9,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,17 @@ class Settings(BaseSettings):
     worker_detector_config: Path | None = None       # default: detection.paths.DEFAULT_CFG
     worker_detector_checkpoint: Path | None = None   # default: detection.paths.DEFAULT_CKPT
     worker_score_threshold: float = 0.5
+    # API v1 (docs/adr/0016-0018)
+    jwt_secret: SecretStr | None = None       # required by the web API; the same value on every replica
+    access_token_minutes: int = 15
+    refresh_token_days: int = 7
+    cookie_secure: bool = True                # set LAL_COOKIE_SECURE=false only for plain-http local work
+    data_root: Path | None = None             # admins may register folders below it
+    upload_root: Path | None = None           # default: <results_dir>/uploads
+    upload_max_bytes: int = 2 * 1024**3       # zip upload limit (compressed); 2 GiB
+    upload_max_unpacked_bytes: int = 8 * 1024**3
+    export_ttl_hours: float = 24.0            # stored export zips are deleted after this
+    page_max: int = 200                       # largest page of a list endpoint
 
     @field_validator("results_dir")
     @classmethod
@@ -48,6 +61,10 @@ class Settings(BaseSettings):
     @property
     def session_dir(self) -> Path:
         return self.results_dir / "sessions"
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.upload_root or self.results_dir / "uploads"
 
 
 @lru_cache

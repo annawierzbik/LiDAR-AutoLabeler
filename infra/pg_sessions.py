@@ -18,7 +18,7 @@ import datetime as dt
 import time
 from collections.abc import Callable, Sequence
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
@@ -186,6 +186,32 @@ class PgSessionStore:
     def list(self) -> list[str]:
         with self.engine.connect() as c:
             return list(c.execute(select(SessionRow.key).order_by(SessionRow.key)).scalars())
+
+    def set_owner(self, key: str, owner_id: int, sequence_id: int | None) -> None:
+        with self.engine.begin() as c:
+            c.execute(update(SessionRow).where(SessionRow.key == key)
+                      .values(owner_id=owner_id, sequence_id=sequence_id))
+
+    def owner(self, key: str) -> int | None:
+        """The owner's user id; SessionNotFound if there is no such session."""
+        with self.engine.connect() as c:
+            row = c.execute(select(SessionRow.owner_id).where(SessionRow.key == key)).first()
+        if row is None:
+            raise SessionNotFound(key)
+        return row.owner_id
+
+    def page(self, owner_id: int | None, limit: int, offset: int) -> tuple[list[dict], int]:
+        """Session metadata, most recently changed first; `owner_id` None: every user's sessions."""
+        cond = [] if owner_id is None else [SessionRow.owner_id == owner_id]
+        cols = (SessionRow.key, SessionRow.revision, SessionRow.status, SessionRow.owner_id, SessionRow.sequence_id,
+                SessionRow.document, SessionRow.updated_at)
+        with self.engine.connect() as c:
+            total = c.execute(select(func.count()).select_from(SessionRow).where(*cond)).scalar()
+            rows = c.execute(select(*cols).where(*cond).order_by(SessionRow.updated_at.desc(), SessionRow.key)
+                             .limit(limit).offset(offset)).all()
+        return [{"key": r.key, "revision": r.revision, "status": r.status, "owner_id": r.owner_id,
+                 "sequence_id": r.sequence_id, "sequence": r.document.get("sequence"), "mode": r.document.get("mode"),
+                 "updated_at": r.updated_at.isoformat()} for r in rows], total
 
     def delete(self, key: str) -> None:
         with self.engine.begin() as c:

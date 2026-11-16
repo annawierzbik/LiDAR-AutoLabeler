@@ -1,7 +1,7 @@
 """PostgreSQL schema (SQLAlchemy 2 declarative models) and engine factory.
 
 The migrations in migrations/ create exactly these tables; tests check that the two agree.
-users, sequences and jobs are created now and used from phase 3/4 on.
+users, sequences, jobs and tabs are used by the API v1 (docs/adr/0016-0018).
 
 A session is stored in parts so that an action writes only what it changed (docs/adr/0011):
 `sessions.document` holds the small metadata (sequence, mode, frame offset and count, next track
@@ -43,6 +43,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(100), unique=True)
     password_hash: Mapped[str | None] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String(20), default="annotator")          # annotator | admin
+    token_version: Mapped[int] = mapped_column(Integer, server_default="0")    # bumped to revoke all tokens
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -54,7 +55,8 @@ class SequenceRow(Base):
     location: Mapped[str] = mapped_column(Text)                                # folder path or blob prefix
     split: Mapped[str | None] = mapped_column(String(20))
     num_frames: Mapped[int] = mapped_column(Integer)
-    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    spec: Mapped[dict] = mapped_column(JSONB, server_default="{}")             # session-builder arguments
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -76,6 +78,7 @@ class JobRow(Base):
     cancel_requested: Mapped[bool] = mapped_column(Boolean, server_default=false())
     heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     worker: Mapped[str | None] = mapped_column(Text)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -91,7 +94,7 @@ class SessionRow(Base):
     status: Mapped[str] = mapped_column(String(20), default="open")           # open | finished
     locked_by: Mapped[str | None] = mapped_column(String(64))
     locked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
-    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     sequence_id: Mapped[int | None] = mapped_column(ForeignKey("sequences.id"))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
@@ -126,6 +129,20 @@ class SessionEventRow(Base):
     detail: Mapped[dict] = mapped_column(JSONB, default=dict)
 
     __table_args__ = (Index("ix_session_events_session_key_id", "session_key", "id"),)
+
+
+class TabRow(Base):
+    """A browser tab's binding to a session (docs/adr/0017): which user and client opened which
+    sequence, and the job that builds the session. Any API replica can serve the tab from it."""
+    __tablename__ = "tabs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)             # the sid in /annotate?sid=
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    client_id: Mapped[str] = mapped_column(String(64))
+    sequence_id: Mapped[int] = mapped_column(ForeignKey("sequences.id"))
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"))
+    title: Mapped[str] = mapped_column(Text, server_default="")
+    status: Mapped[str] = mapped_column(String(20), server_default="open")    # open | finished
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 def make_engine(url: str) -> Engine:

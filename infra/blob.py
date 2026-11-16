@@ -22,6 +22,9 @@ class BlobStore(Protocol):
 
     def exists(self, key: str) -> bool: ...
 
+    def delete(self, key: str) -> None:
+        """Remove the blob (nothing happens if there is none)."""
+
     def list(self, prefix: str = "") -> list[str]:
         """Sorted keys starting with `prefix`."""
 
@@ -67,6 +70,9 @@ class LocalBlobStore:
 
     def exists(self, key: str) -> bool:
         return self.path(key).is_file()
+
+    def delete(self, key: str) -> None:
+        self.path(key).unlink(missing_ok=True)
 
     def list(self, prefix: str = "") -> list[str]:
         """Walks only the folders that can hold keys starting with `prefix` (results/ also holds

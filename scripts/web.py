@@ -1,29 +1,23 @@
-"""Run LiDAR AutoLabeler in the browser.
+"""Run the LiDAR AutoLabeler web API and pages (one API process).
 
-    python -m scripts.web                      # then open http://127.0.0.1:8000
-    python -m scripts.web --host 0.0.0.0       # reachable from other computers (server)
+    python -m scripts.web                      # then open http://127.0.0.1:8000 and log in
+    python -m scripts.web --host 0.0.0.0       # reachable from other computers
 
-WARNING: the server has no authentication. Anyone who can reach it can open ANY folder on the
-server's disk by typing its path, read its point clouds and write results. Only use
---host 0.0.0.0 (or any non-local address) on a network you trust.
-
-The start screen annotates a folder of .bin frames. Sessions are stored in results/sessions/
-(LAL_SESSION_STORE=file, the default) or in PostgreSQL (LAL_SESSION_STORE=postgres, LAL_DATABASE_URL).
-Run it from the project root so data/ and results/ are found.
+Needs PostgreSQL, Redis and at least one worker of each queue (docs/adr/0003, 0015):
+    docker compose -f docker-compose.db.yml up -d
+    python -m infra.migrate
+    python -m scripts.create_user admin --role admin
+    celery -A infra.celery_app worker -Q gpu -P solo -n gpu@%h
+    celery -A infra.celery_app worker -Q cpu -P solo -n cpu@%h
+and the settings LAL_DATABASE_URL, LAL_REDIS_URL, LAL_JWT_SECRET, LAL_SESSION_STORE=postgres,
+LAL_JOB_QUEUE=celery (the workers need the same values). The login cookies are marked Secure, so
+over plain http (local work without TLS) set LAL_COOKIE_SECURE=false. Several API processes can
+run behind a load balancer: they keep no state between requests.
 """
 from __future__ import annotations
 
 import argparse
 import webbrowser
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
-
-NETWORK_WARNING = (
-    "WARNING: listening on {host} - this server has NO authentication and opens any folder\n"
-    "         path on this computer's disk for anyone who can reach it. Use only on a trusted network."
-)
 
 
 def main() -> None:
@@ -38,18 +32,14 @@ def main() -> None:
 
     import uvicorn
 
-    from web.manager import SessionManager
-    from web.server import create_app
+    from api.app import create_app
 
-    manager = SessionManager()
+    app = create_app()                       # fails here with a clear message when a setting is missing
     url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}"
-    if args.host not in LOCAL_HOSTS:
-        print(NETWORK_WARNING.format(host=args.host))
     print(f"Open {url}   (Ctrl+C to stop)")
     if not args.no_browser:
         webbrowser.open(url)
-    uvicorn.run(create_app(manager), host=args.host, port=args.port, log_level="warning")
-    # nothing to save on exit: every request stores its changes before it answers
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
