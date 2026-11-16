@@ -85,7 +85,8 @@ def env(tmp_path, pg_url, pg_engine):
     queue = CeleryTaskQueue(PgJobStore(pg_engine, stale_seconds=2, max_attempts=3),
                             send=lambda job_id, q: sender.send_task("lal.run_job", args=[job_id], queue=q))
     yield type("Env", (), {"queue": queue, "folder": folder, "results": tmp_path / "results",
-                           "start_worker": staticmethod(start_worker), "logs": tmp_path})
+                           "start_worker": staticmethod(start_worker), "logs": tmp_path,
+                           "worker_env": worker_env})
     for w in workers:
         w.stop()
 
@@ -156,3 +157,36 @@ def test_a_job_for_another_detector_configuration_fails_clearly(env):
     st = wait_for(env.queue, job, lambda s: s.state in ("done", "failed"), logs=env.logs)
     assert st.state == "failed" and "another detector loaded" in st.message and "0.7" in st.message
     assert cache_files(env.results) == []
+
+
+def test_heartbeat_continues_while_the_model_loads_and_during_a_slow_frame(env):
+    """A healthy job must never be taken for a lost one: the model load (4 s) and one frame (4 s)
+    each take twice LAL_JOB_STALE_SECONDS (2 s), yet the heartbeat keeps going."""
+    from sqlalchemy import text
+
+    env.worker_env.update({"LAL_FAKE_DETECTOR_LOAD_SECONDS": "4", "LAL_FAKE_DETECTOR_SLOW_FRAME": "5",
+                           "LAL_FAKE_DETECTOR_SLOW_SECONDS": "4", "LAL_FAKE_DETECTOR_DELAY": "0.02"})
+    env.start_worker("w1")
+    job = env.queue.submit("detect_track", payload(env.folder, stop=12), "drive")
+    engine = env.queue.store.engine
+    seen_states, beats = [], []
+    deadline = time.time() + 90
+    while True:
+        st = env.queue.status(job)                                   # also runs the stale check
+        seen_states.append((st.state, st.attempts, round(st.progress, 2), st.message))
+        with engine.connect() as c:
+            hb = c.execute(text("SELECT heartbeat_at FROM jobs WHERE id = :i"), {"i": job}).scalar()
+        if hb is not None:
+            beats.append((time.time(), hb.timestamp(), st.message, st.progress))
+        if st.state in ("done", "failed", "cancelled") or time.time() > deadline:
+            break
+        time.sleep(0.2)
+    assert st.state == "done", (st, seen_states[-5:])
+    assert all(s[0] in ("queued", "running", "done") for s in seen_states)
+    running = [i for i, s in enumerate(seen_states) if s[0] == "running"]
+    assert running and all(s[0] != "queued" for s in seen_states[running[0]:])   # never requeued
+    assert st.attempts == 1
+    loading = [b for b in beats if b[2] == "loading the detector"]
+    assert loading and max(b[1] for b in loading) - min(b[1] for b in loading) > 2.5   # beats during the load
+    stalled = [b for b in beats if b[2] == "detecting" and 0.4 < b[3] < 0.6]          # around frame 5
+    assert stalled and max(b[1] for b in stalled) - min(b[1] for b in stalled) > 2.5   # beats during the slow frame
