@@ -167,3 +167,76 @@ def test_import_writes_frames_and_history_rows(pg_engine, tmp_path):
                                 "ORDER BY frame")).scalars().all()
         history = c.execute(text("SELECT stack, label FROM session_history WHERE session_key = 'x_assisted'")).all()
     assert frames == [0, 1] and [tuple(h) for h in history] == [("undo", "accept_track")]
+
+
+def _old_session():
+    s = AnnotationSession.from_tracking("0000", [[box(10)], [box(11)]])
+    s.accept(0, 0)
+    s.reject(1, 0)
+    s.undo()
+    return s
+
+
+def test_assign_owner_moves_a_session_with_its_frames_history_and_events(pg_engine):
+    from infra.auth import UserStore
+    from infra.sessions import SessionExists, SessionNotFound
+
+    uid = UserStore(pg_engine).create("anna", "a long password 1").id
+    store = PgSessionStore(pg_engine)
+    s = _old_session()
+    store.create("0000_assisted", s)
+    assert store.unowned() == [("0000_assisted", "0000")]
+    store.assign_owner("0000_assisted", uid, f"u{uid}_training_0000_assisted")
+    assert not store.exists("0000_assisted") and store.owner(f"u{uid}_training_0000_assisted") == uid
+    moved = store.load(f"u{uid}_training_0000_assisted")
+    assert moved.annotations(0)[0].status.value == "accepted" and moved.redo() == "reject"   # frames + history
+    assert [e.action for e in store.events(f"u{uid}_training_0000_assisted")] == [e.action for e in s.events]
+    assert store.unowned() == []
+    with pytest.raises(ValueError, match="already belongs"):
+        store.assign_owner(f"u{uid}_training_0000_assisted", uid, "x")
+    with pytest.raises(SessionNotFound):
+        store.assign_owner("missing", uid, "y")
+    store.create("training_0000_assisted", _old_session())             # its new key is taken
+    with pytest.raises(SessionExists):
+        store.assign_owner("training_0000_assisted", uid, f"u{uid}_training_0000_assisted")
+    assert store.owner("training_0000_assisted") is None              # left as it was
+    store.lock("training_0000_assisted", "someone")
+    with pytest.raises(ValueError, match="locked"):
+        store.assign_owner("training_0000_assisted", uid, f"u{uid}_other")
+
+
+def test_import_with_an_owner_uses_the_key_a_tab_opens(pg_engine, tmp_path):
+    from argparse import Namespace
+
+    from infra.auth import UserStore
+    from pipeline.session_builder import make_args, session_keys
+    from scripts.import_sessions import import_folder
+
+    uid = UserStore(pg_engine).create("anna", "a long password 1").id
+    _old_session().save(tmp_path / "0000_assisted.json")
+    store = PgSessionStore(pg_engine)
+    out = import_folder(tmp_path, store, owner_id=uid)
+    tab_key = session_keys(Namespace(**vars(make_args(sequence="0000", split="training", mode="assisted")), owner=uid))[0]
+    assert out["imported"] == [tab_key] and store.owner(tab_key) == uid
+
+
+def test_assign_session_owner_script(pg_url, pg_engine, monkeypatch, capsys):
+    from infra.auth import UserStore
+    from infra.settings import Settings
+    from scripts.assign_session_owner import main
+
+    monkeypatch.setenv("LAL_DATABASE_URL", pg_url)
+    monkeypatch.setattr("infra.settings.get_settings", lambda: Settings())   # not the cached settings
+    uid = UserStore(pg_engine).create("anna", "a long password 1").id
+    store = PgSessionStore(pg_engine)
+    for key in ("0000_assisted", "testing_0001_manual"):
+        store.create(key, _old_session())
+    assert main(["--list"]) == 0 and "2 session(s) without an owner" in capsys.readouterr().out
+    assert main(["anna", "--all", "--dry-run"]) == 0
+    assert f"0000_assisted -> u{uid}_training_0000_assisted" in capsys.readouterr().out
+    assert store.unowned() != []                                       # dry run changed nothing
+    assert main(["nobody", "--all"]) == 2
+    assert main(["anna", "0000_assisted", "missing"]) == 1             # one assigned, one reported
+    assert store.owner(f"u{uid}_training_0000_assisted") == uid
+    assert main(["anna", "--all"]) == 0 and store.unowned() == []
+    assert store.owner(f"u{uid}_testing_0001_manual") == uid

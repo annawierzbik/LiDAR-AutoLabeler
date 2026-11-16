@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable, Sequence
 
 from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import literal as sa_literal
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
@@ -191,6 +192,39 @@ class PgSessionStore:
         with self.engine.begin() as c:
             c.execute(update(SessionRow).where(SessionRow.key == key)
                       .values(owner_id=owner_id, sequence_id=sequence_id))
+
+    def assign_owner(self, key: str, owner_id: int, new_key: str) -> None:
+        """Give a session without an owner (stored before phase 4) to `owner_id` under `new_key`
+        (pipeline.session_builder.key_for_owner), in one transaction: the session row is copied to
+        the new key, its frames, history and events are moved, the old row is deleted.
+        SessionNotFound; ValueError if it already has an owner or is locked; SessionExists if
+        `new_key` is taken."""
+        cols = [col.name for col in SessionRow.__table__.columns if col.name not in ("key", "owner_id")]
+        try:
+            with self.engine.begin() as c:
+                row = c.execute(select(SessionRow.owner_id, SessionRow.locked_by, SessionRow.locked_at)
+                                .where(SessionRow.key == key).with_for_update()).first()
+                if row is None:
+                    raise SessionNotFound(key)
+                if row.owner_id is not None:
+                    raise ValueError(f"session {key} already belongs to user {row.owner_id}")
+                if row.locked_by and row.locked_at and row.locked_at > self._now() - dt.timedelta(seconds=self.lock_ttl):
+                    raise ValueError(f"session {key} is locked by {row.locked_by}")
+                src = select(*[sa_literal(new_key).label("key"), sa_literal(owner_id).label("owner_id")],
+                             *[SessionRow.__table__.c[n] for n in cols]).where(SessionRow.key == key)
+                c.execute(insert(SessionRow).from_select(["key", "owner_id", *cols], src))
+                for table in (SessionFrameRow, SessionHistoryRow, SessionEventRow):
+                    c.execute(update(table).where(table.session_key == key).values(session_key=new_key))
+                c.execute(delete(SessionRow).where(SessionRow.key == key))
+        except IntegrityError:
+            raise SessionExists(new_key) from None
+
+    def unowned(self) -> list[tuple[str, str]]:
+        """(key, sequence label) of every session without an owner."""
+        with self.engine.connect() as c:
+            return [(r.key, (r.document or {}).get("sequence", "")) for r in
+                    c.execute(select(SessionRow.key, SessionRow.document).where(SessionRow.owner_id.is_(None))
+                              .order_by(SessionRow.key))]
 
     def owner(self, key: str) -> int | None:
         """The owner's user id; SessionNotFound if there is no such session."""

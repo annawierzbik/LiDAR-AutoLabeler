@@ -8,6 +8,7 @@ automatically (fresh=True starts over). In manual mode no detector runs.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from detection.fov import add_fov_argument, sequence_mode
@@ -118,8 +119,28 @@ def session_keys(args) -> tuple[str, str | None]:
     key = session_file(name, args.mode, args.start, args.stop).stem
     owner = getattr(args, "owner", None)
     if owner is not None:
-        return f"u{int(owner)}_{key}", None
+        return owned_key(owner, key), None
     return key, (session_file(legacy, args.mode, args.start, args.stop).stem if legacy else None)
+
+
+def owned_key(owner: int, key: str) -> str:
+    """The key of a user's session: u<owner>_<key without owner> (docs/adr/0017)."""
+    return f"u{int(owner)}_{key}"
+
+
+_FOLDER_KEY = re.compile(r"_[0-9a-f]{6}$")
+
+
+def key_for_owner(key: str, sequence_label: str, owner: int) -> str:
+    """The key a session stored before phase 4 (no owner) gets when it is assigned to `owner`:
+    the key a tab of that user computes for the same sequence, range and mode.
+
+    Keys of KITTI training sequences written before the split was part of the name (legacy keys,
+    <sequence>[_f<a>-<b>]_<mode>, docs/adr/0006) get the split: training_<sequence>...; an owner
+    key has no legacy form. A folder's key (<name>_<6 hex>) and a <split>_<sequence> key are kept."""
+    legacy = (key.startswith(sequence_label + "_") and not _FOLDER_KEY.search(sequence_label)
+              and not key.startswith(("training_", "testing_")))
+    return owned_key(owner, f"training_{key}" if legacy else key)
 
 
 def new_session(args, seq, detect=None) -> AnnotationSession:

@@ -40,6 +40,14 @@ API replicas could not serve the same tab.
   (each opening is its own job); the detection cache and `SessionExists` handling keep the result
   consistent.
 - Sessions stored before phase 4 have no owner and no `u<id>_` prefix: admins see them in
-  `GET /api/v1/sessions`, but no tab opens them (they could be assigned with an UPDATE of
-  `owner_id` and key; not automated).
+  `GET /api/v1/sessions`, but no tab opens them until they are assigned.
+  `python -m scripts.import_sessions --owner <user>` imports files straight to a user;
+  `python -m scripts.assign_session_owner <user> --all | <key>...` (`--list`, `--dry-run`) assigns
+  rows already in the database. Both give the session the key a tab of that user computes for the
+  same sequence, range and mode (`pipeline.session_builder.key_for_owner`: `u<id>_` prefix, and a
+  legacy KITTI key `<sequence>...` becomes `training_<sequence>...`, ADR 0006).
+  `PgSessionStore.assign_owner` moves the row, frames, history and events in one transaction and
+  refuses sessions that already have an owner, are locked, or whose new key is taken. A folder
+  session opens again when the folder is registered at the same path (the key contains a hash of
+  the path); a session of a folder that is now uploaded instead does not match and stays as it is.
 - Tab rows are never deleted yet; they are small (one per opening).

@@ -101,3 +101,23 @@ def test_cache_files_are_written_atomically(tmp_path, monkeypatch):
         save_results(path, range(1), [[box(2)]])
     assert path.read_text() == before and [p.name for p in tmp_path.iterdir()] == ["c.json"]
     assert json.loads(before)["frames"][0][0]["x"] == 1
+
+
+def test_a_session_without_owner_gets_the_key_a_tab_of_the_owner_opens(kitti, tmp_path):
+    """key_for_owner maps every pre-phase-4 key to session_keys(... owner=...) of the same sequence."""
+    from ingestion.folder import folder_key
+    from pipeline.session_builder import key_for_owner, session_keys
+
+    for split, legacy, stop in (("training", True, None), ("training", False, None), ("testing", False, None),
+                                ("training", True, 3), ("training", False, 3)):
+        a = args(kitti.root, split=split, mode="assisted", stop=stop)
+        new, old_legacy = session_keys(a)
+        old = old_legacy if legacy else new
+        assert key_for_owner(old, "0000", 7) == session_keys(Namespace(**vars(a), owner=7))[0], (old, split)
+    folder = tmp_path / "drive" / "0000"                              # a folder that is also called 0000
+    folder.mkdir(parents=True)
+    f = args(kitti.root, folder=str(folder), mode="manual")
+    label = folder_key(folder)
+    assert key_for_owner(session_keys(f)[0], label, 3) == session_keys(Namespace(**vars(f), owner=3))[0]
+    assert key_for_owner("0000_assisted", "0000", 5) == "u5_training_0000_assisted"
+    assert key_for_owner(f"{label}_manual", label, 5) == f"u5_{label}_manual"

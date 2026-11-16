@@ -92,6 +92,12 @@ class UserStore:
                             .where(User.id == user_id)).first()
         return None if row is None else self._principal(row)
 
+    def by_name(self, username: str) -> Principal | None:
+        with self.engine.connect() as c:
+            row = c.execute(select(User.id, User.username, User.role, User.token_version)
+                            .where(User.username == username.strip())).first()
+        return None if row is None else self._principal(row)
+
     def authenticate(self, username: str, password: str) -> Principal:
         with self.engine.connect() as c:
             row = c.execute(select(User.id, User.username, User.role, User.token_version, User.password_hash)

@@ -167,3 +167,23 @@ def test_register_is_for_admins_and_needs_a_data_root(api, admin, anna, monkeypa
     a = api.restart()
     r = a.login("boss").post("/api/v1/sequences/register", {"path": "drive_a"})
     assert r.status_code == 403 and "LAL_DATA_ROOT" in r.json()["error"]["message"]
+
+
+def test_a_session_from_before_phase_4_opens_after_it_is_assigned(api, admin, anna):
+    """An unowned session of a registered folder, given to anna (scripts.assign_session_owner),
+    is what anna's tab opens: her box is there."""
+    from common.boxes import BoundingBox3D
+    from ingestion.folder import folder_key
+    from pipeline.session_builder import key_for_owner
+    from verification.session import AnnotationSession
+
+    label = folder_key(api.env.data_root / "drive_a")
+    old = AnnotationSession.from_tracking(label, [[] for _ in range(FRAMES)], "manual")
+    old.add_manual(1, BoundingBox3D(7.5, 0.0, -1.0, 4.0, 1.8, 1.5, 0.0, "Car", 1.0, 0))
+    api.svc.sessions.create(f"{label}_manual", old)
+    api.svc.sessions.assign_owner(f"{label}_manual", anna.user["id"], key_for_owner(f"{label}_manual", label,
+                                                                                    anna.user["id"]))
+    seq = admin.post("/api/v1/sequences/register", {"path": "drive_a", "owner_id": anna.user["id"]}).json()
+    sid = api.open_tab(anna, seq["id"], "manual")
+    boxes = anna.get(f"/api/v1/tabs/{sid}/state?frame=1").json()["annotations"]
+    assert [b["x"] for b in boxes] == [7.5]

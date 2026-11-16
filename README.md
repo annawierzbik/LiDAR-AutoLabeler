@@ -81,7 +81,7 @@ startuje.
 | `scripts.verify_dataset` | sprawdzenie struktury danych KITTI |
 
 **Skrypty wymagające PostgreSQL:** `scripts.create_user`, `scripts.import_sessions` (czyta pliki
-sesji, zapisuje do bazy), `scripts.bench_session_store` (porównuje magazyn plikowy z bazą).
+sesji, zapisuje do bazy), `scripts.assign_session_owner`, `scripts.bench_session_store` (porównuje magazyn plikowy z bazą).
 `FileSessionStore` (sesje jako pliki JSON) jest używany już tylko przez `scripts.bench_session_store`
 i testy jednostkowe.
 
@@ -131,8 +131,11 @@ Workery potrzebują tych samych zmiennych `LAL_*` co serwer.
   (`docs/adr/0018-api-v1-conventions.md`). Serwer nie trzyma stanu między żądaniami, więc kilka
   procesów API może działać za load balancerem.
 
-Sesje zapisane wcześniej w plikach można przenieść do bazy: `python -m scripts.import_sessions`
-(nie mają właściciela; widzi je tylko admin).
+Sesje zapisane wcześniej w plikach można przenieść do bazy:
+`python -m scripts.import_sessions --owner <użytkownik>`. Sesje bez właściciela, które już są w
+bazie (widzi je tylko admin), przypisuje `python -m scripts.assign_session_owner <użytkownik> --all`
+(`--list` pokazuje je, `--dry-run` tylko wypisuje nowe klucze). Potem otwiera je karta tego
+użytkownika dla tej samej sekwencji (`docs/adr/0017-ownership-tabs-and-session-locks.md`).
 
 ### Testy
 
