@@ -152,3 +152,41 @@ def test_session_files_are_json_v2_with_their_events(store):
     store.create("a", s)
     data = json.loads(store.path("a").read_text())
     assert data["version"] == 2 and data["events"] and "revision" in data
+
+
+def test_list_walks_only_matching_folders(tmp_path, monkeypatch):
+    blobs = LocalBlobStore(tmp_path)
+    for key in ("a_1.json", "a_2.json", "b.json", "sub/a_3.json", "big/x.bin", "big/deep/y.bin"):
+        blobs.put(key, b"x")
+    walked = []
+    real = os.scandir
+    monkeypatch.setattr(os, "scandir", lambda p: walked.append(str(p)) or real(p))
+    assert blobs.list("a_") == ["a_1.json", "a_2.json"]
+    assert not any("big" in w or "sub" in w for w in walked)           # unrelated folders are not scanned
+    assert blobs.list("sub/") == ["sub/a_3.json"] and blobs.list("big/deep/") == ["big/deep/y.bin"]
+
+
+def test_blob_sequence_matches_the_loaders(tmp_path):
+    from argparse import Namespace
+
+    from infra.sequences import open_blob_sequence
+    from ingestion.folder import FolderSequence
+    from ingestion.sequence import SequenceLoader
+
+    vel = tmp_path / "raw" / "training" / "velodyne" / "0003"
+    vel.mkdir(parents=True)
+    for i in range(3):
+        np.random.default_rng(i).uniform(-5, 5, (9, 4)).astype("<f4").tofile(vel / f"{i:06d}.bin")
+    calib = tmp_path / "raw" / "training" / "calib"
+    calib.mkdir()
+    (calib / "0003.txt").write_text("P2: " + " ".join(["1"] * 12) + "\nR_rect " + " ".join(["0"] * 9) + "\n")
+    kitti = Namespace(folder=None, data_root=str(tmp_path / "raw"), split="training", sequence="0003")
+    a, b = open_blob_sequence(kitti), SequenceLoader(tmp_path / "raw", "training", "0003")
+    assert len(a) == len(b) == 3
+    for i in range(3):
+        assert np.array_equal(a[i].points, b[i].points) and a[i].frame_id == b[i].frame_id
+        assert a[i].calib.keys() == b[i].calib.keys()
+        assert all(np.array_equal(a[i].calib[k], b[i].calib[k]) for k in b[i].calib)
+    folder = Namespace(folder=str(vel), data_root="", split="", sequence="")
+    c, d = open_blob_sequence(folder), FolderSequence(vel)
+    assert [c[i].frame_id for i in range(3)] == [d[i].frame_id for i in range(3)] and c[0].calib == {}

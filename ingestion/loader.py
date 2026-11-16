@@ -40,26 +40,29 @@ def parse_calib_file(calib_path):
     Returns:
         Słownik {nazwa_macierzy: numpy array}, np. {"P2": array(3,4), "R_rect": array(3,3)}.
     """
-    calib_path = Path(calib_path)
-    calib = {}
+    with open(Path(calib_path), "r") as f:
+        return parse_calib_text(f.read())
 
-    with open(calib_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.replace(":", " ", 1).split()
-            if len(parts) < 2:
-                continue
-            key = parts[0]
-            numbers = np.array([float(x) for x in parts[1:]])
-            
-            if numbers.size == 12:
-                calib[key] = numbers.reshape(3, 4)
-            elif numbers.size == 9:
-                calib[key] = numbers.reshape(3, 3)
-            else:
-                calib[key] = numbers
+
+def parse_calib_text(text: str) -> dict:
+    """parse_calib_file on the text of a calibration file (e.g. read from a BlobStore)."""
+    calib = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.replace(":", " ", 1).split()
+        if len(parts) < 2:
+            continue
+        key = parts[0]
+        numbers = np.array([float(x) for x in parts[1:]])
+
+        if numbers.size == 12:
+            calib[key] = numbers.reshape(3, 4)
+        elif numbers.size == 9:
+            calib[key] = numbers.reshape(3, 3)
+        else:
+            calib[key] = numbers
     
     return calib
 

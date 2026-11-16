@@ -59,6 +59,7 @@
       <button id="open" class="primary">Open</button>
     </div>
     <div class="msg" id="openMsg" role="status"></div>
+    <button id="cancelOpen" hidden>Cancel</button>
 
     <div id="recent" hidden>
       <h2>Recent folders</h2>
@@ -85,14 +86,26 @@ async function call(path, body) {
 }
 
 // wait until a session job is ready, then open the annotation page
+// detection progress while loading; the Cancel button stops the detection task (at the next frame)
+function describeProgress(p) {
+  if (!p) return 'Loading the sequence. If detection has to run first, this can take a few minutes.';
+  if (p.state === 'queued') return 'Waiting for a free detection worker...' + (p.attempts > 0 ? ` (attempt ${p.attempts + 1})` : '');
+  if (p.state === 'cancelling') return 'Stopping...';
+  return `Detecting objects: ${Math.round(p.fraction * 100)}%` + (p.message && p.message !== 'detecting' ? ` (${p.message})` : '');
+}
 async function openWhenReady(sid, msgEl) {
-  spin(msgEl, 'Loading the sequence. If detection has to run first, this can take a few minutes.');
-  for (;;) {
-    const j = await call('/api/jobs/' + sid);
-    if (j.status === 'ready') { location.href = '/annotate?sid=' + sid; return; }
-    if (j.status === 'error') throw new Error(j.message);
-    await new Promise(r => setTimeout(r, 700));
-  }
+  const cancel = $('cancelOpen');
+  cancel.hidden = false;
+  cancel.onclick = () => { cancel.disabled = true; call('/api/jobs/' + sid + '/cancel', {}).catch(() => {}); };
+  try {
+    for (;;) {
+      const j = await call('/api/jobs/' + sid);
+      if (j.status === 'ready') { location.href = '/annotate?sid=' + sid; return; }
+      if (j.status === 'error') throw new Error(j.message === 'cancelled' ? 'Cancelled.' : j.message);
+      spin(msgEl, describeProgress(j.progress));
+      await new Promise(r => setTimeout(r, 700));
+    }
+  } finally { cancel.hidden = true; cancel.disabled = false; }
 }
 
 // ------------------------------------------------------------------- recent folders

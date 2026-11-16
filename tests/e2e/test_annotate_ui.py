@@ -325,6 +325,29 @@ def test_review_on_postgres_survives_a_restart(page, tmp_path, sequence_dir, con
         srv.stop()
 
 
+def test_opening_shows_detection_progress_and_can_be_cancelled(page, tmp_path, sequence_dir, console_errors):
+    from tests.e2e.conftest import AppServer
+
+    srv = AppServer(tmp_path / "results", {"LAL_E2E_TRACK_DELAY": "0.5"})
+    srv.start()
+    try:
+        page.goto(srv.url + "/")
+        page.fill("#path", str(sequence_dir))
+        page.click("#open")
+        expect(page.locator("#openMsg")).to_contain_text(re.compile(r"Detecting objects: [1-9]\d*%"))
+        expect(page.locator("#cancelOpen")).to_be_visible()
+        page.click("#cancelOpen")
+        expect(page.locator("#openMsg")).to_have_text("Cancelled.", timeout=10000)
+        expect(page.locator("#cancelOpen")).to_be_hidden()
+        assert "/annotate" not in page.url
+        assert not list((tmp_path / "results").glob("*.json"))       # no partial detection cache
+        page.fill("#path", str(sequence_dir))                           # opening again works
+        page.click("#open")
+        page.wait_for_url(re.compile(r"/annotate\?sid="), timeout=20000)
+    finally:
+        srv.stop()
+
+
 # Not covered (needs a human look or pixel-level tests):
 # - selecting a box by clicking it in the 3D view (raycast on the WebGL canvas),
 # - orbit / pan / zoom with the mouse and the view buttons (Top view, Focus box, Reset view),

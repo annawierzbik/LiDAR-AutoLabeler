@@ -1,6 +1,7 @@
 # 0014 Cooperative cancellation (plan for phase 3)
 
-Status: proposed (to implement in phase 3)
+Status: implemented in phase 3 (see ADR 0015). The flag is `jobs.cancel_requested`, read by the
+worker's heartbeat thread; `track_sequence` takes `should_stop` and `progress` callbacks.
 
 ## Context
 `ThreadJobQueue.cancel` only works before a job starts; a running detection cannot be stopped, and

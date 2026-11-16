@@ -52,3 +52,21 @@ def pg_engine(pg_url):
     with engine.begin() as c:
         c.execute(text("TRUNCATE session_events, sessions, jobs, sequences, users RESTART IDENTITY CASCADE"))
     engine.dispose()
+
+
+def gpu_requested(markexpr: str) -> bool:
+    """True when the -m expression names the gpu marker positively (not only as "not gpu")."""
+    import re
+
+    return re.search(r"(?<!not )\bgpu\b", markexpr or "") is not None
+
+
+def pytest_collection_modifyitems(config, items):
+    """GPU tests run only when asked for by name (`-m gpu`, `-m "gpu and worker"`, ...). Another
+    selection such as `-m worker` must not start the real model on a GPU that experiments may use."""
+    if gpu_requested(config.getoption("markexpr")):
+        return
+    skip = pytest.mark.skip(reason="uses the GPU: select it explicitly with -m gpu")
+    for item in items:
+        if "gpu" in item.keywords:
+            item.add_marker(skip)

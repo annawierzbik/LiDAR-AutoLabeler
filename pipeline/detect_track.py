@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,18 +22,31 @@ from tracking.tracker import Tracker
 from verification import cache
 
 
-def track_sequence(seq: SequenceLoader, indices: range, threshold: float,
-                   fov: str = "auto") -> list[list[BoundingBox3D]]:
-    from detection.detector import (
-        Detector,  # heavy import (torch + pcdet), only when needed
-    )
+class Cancelled(Exception):
+    """track_sequence stopped because should_stop() said so; nothing was produced."""
 
-    detector = Detector(score_threshold=threshold, fov=fov)
+
+def track_sequence(seq: SequenceLoader, indices: range, threshold: float, fov: str = "auto", detector=None,
+                   should_stop: Callable[[], bool] | None = None,
+                   progress: Callable[[float], None] | None = None) -> list[list[BoundingBox3D]]:
+    """Detect + track `indices` of `seq`. `detector`: an already loaded detector (a worker's), else
+    one is made for this run. `should_stop` is asked before every frame (cooperative cancellation:
+    raises Cancelled, the partial result is dropped); `progress(fraction)` is called after every frame."""
+    if detector is None:
+        from detection.detector import (
+            Detector,  # heavy import (torch + pcdet), only when needed
+        )
+
+        detector = Detector(score_threshold=threshold, fov=fov)
     tracker = Tracker()
     results = []
     t0 = time.time()
     for n, i in enumerate(indices, 1):
+        if should_stop is not None and should_stop():
+            raise Cancelled(f"stopped after {n - 1} of {len(indices)} frames")
         results.append(tracker.update(detector.predict(seq[i])))
+        if progress is not None:
+            progress(n / len(indices))
         if n % 10 == 0 or n == len(indices):
             print(f"  {n}/{len(indices)} frames ({(time.time() - t0) / n:.2f} s/frame)")
     return results
@@ -52,6 +66,14 @@ def save_results(path: Path, indices: range, results: list[list[BoundingBox3D]],
     if meta is not None:
         data["meta"] = meta
     LocalBlobStore(path.parent).put(path.name, json.dumps(data).encode("utf-8"))   # atomic
+
+
+def write_results(blobs, key: str, indices: range, results: list[list[BoundingBox3D]], meta: dict | None) -> None:
+    """save_results into a BlobStore (atomic put)."""
+    data = {"start": indices.start, "stop": indices.stop, "frames": [[asdict(b) for b in boxes] for boxes in results]}
+    if meta is not None:
+        data["meta"] = meta
+    blobs.put(key, json.dumps(data).encode("utf-8"))
 
 
 def parse_results(data: dict):

@@ -69,7 +69,21 @@ class LocalBlobStore:
         return self.path(key).is_file()
 
     def list(self, prefix: str = "") -> list[str]:
+        """Walks only the folders that can hold keys starting with `prefix` (results/ also holds
+        large experiment folders that a cache lookup must not scan)."""
         if not self.root.is_dir():
             return []
-        keys = (p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file())
-        return sorted(k for k in keys if k.startswith(prefix) and not PurePosixPath(k).name.endswith(".tmp"))
+        out = []
+
+        def walk(folder: Path, rel: str) -> None:
+            for entry in os.scandir(folder):
+                key = rel + entry.name
+                if entry.is_dir():
+                    sub = key + "/"
+                    if sub.startswith(prefix) or prefix.startswith(sub):
+                        walk(Path(entry.path), sub)
+                elif key.startswith(prefix) and not entry.name.endswith(".tmp"):
+                    out.append(key)
+
+        walk(self.root, "")
+        return sorted(out)

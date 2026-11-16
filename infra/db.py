@@ -14,6 +14,7 @@ import datetime as dt
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Double,
     Float,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -61,12 +63,21 @@ class JobRow(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     kind: Mapped[str] = mapped_column(String(40))
     title: Mapped[str] = mapped_column(Text, default="")
-    state: Mapped[str] = mapped_column(String(20), default="queued")          # queued | running | done | failed | cancelled
+    # queued | running | cancelling | done | failed | cancelled
+    state: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     message: Mapped[str] = mapped_column(Text, default="")
     result: Mapped[dict | None] = mapped_column(JSONB)
-    cache_key: Mapped[str | None] = mapped_column(String(128), index=True)     # idempotency (phase 3)
+    cache_key: Mapped[str | None] = mapped_column(String(128), index=True)     # dedupe key (infra.tasks.dedupe_key)
     session_key: Mapped[str | None] = mapped_column(Text)
+    queue: Mapped[str] = mapped_column(String(20), server_default="cpu")       # gpu | cpu
+    payload: Mapped[dict] = mapped_column(JSONB, server_default="{}")
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    worker: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                     onupdate=func.now())

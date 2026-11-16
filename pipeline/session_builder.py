@@ -49,10 +49,22 @@ def file_names(args) -> tuple[str, str, str | None]:
     return args.sequence, f"{args.split}_{args.sequence}", args.sequence if args.split == "training" else None
 
 
-def _cache_candidates(name: str) -> list[Path]:
-    folder = RESULTS_DIR
-    return [folder / f"{name}.json"] + sorted(
-        p for p in folder.glob(f"{name}_*.json") if cache.is_cache_name(p.stem, name))
+def cache_key_name(name: str, indices: range, num_frames: int) -> str:
+    """results/<name>.json for a whole sequence, <name>_f<start>-<stop>.json for a part of it."""
+    whole = indices.start == 0 and indices.stop == num_frames
+    return f"{name}.json" if whole else f"{name}_f{indices.start}-{indices.stop}.json"
+
+
+def results_blobs():
+    """The detection + tracking cache: a LocalBlobStore on results/ (keys = file names)."""
+    from infra.blob import LocalBlobStore
+
+    return LocalBlobStore(RESULTS_DIR)
+
+
+def _cache_candidates(blobs, name: str) -> list[str]:
+    return [f"{name}.json"] + [k for k in blobs.list(f"{name}_")
+                               if "/" not in k and k.endswith(".json") and cache.is_cache_name(k[:-5], name)]
 
 
 def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool = False,
@@ -64,10 +76,11 @@ def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool
     with a warning), then at the same names with `legacy_name`."""
     from pipeline.detect_track import parse_results
 
-    candidates = _cache_candidates(name) + (_cache_candidates(legacy_name) if legacy_name else [])
-    found = cache.choose(candidates, meta,
-                         usable=lambda d: d["start"] <= want.start and want.stop <= d["stop"],
-                         allow_missing_weights=allow_missing_weights)
+    blobs = results_blobs()
+    candidates = _cache_candidates(blobs, name) + (_cache_candidates(blobs, legacy_name) if legacy_name else [])
+    found = cache.choose_blob(blobs, candidates, meta,
+                              usable=lambda d: d["start"] <= want.start and want.stop <= d["stop"],
+                              allow_missing_weights=allow_missing_weights)
     if found is None:
         return None
     indices, results = parse_results(found[1])
@@ -93,9 +106,12 @@ def session_keys(args) -> tuple[str, str | None]:
     return key, (session_file(legacy, args.mode, args.start, args.stop).stem if legacy else None)
 
 
-def new_session(args, seq) -> AnnotationSession:
+def new_session(args, seq, detect=None) -> AnnotationSession:
     """A new session from cached detections, or after running detection + tracking (assisted), or
-    empty (manual: no detector at all, so it works without a GPU). --start/--stop select a part."""
+    empty (manual: no detector at all, so it works without a GPU). --start/--stop select a part.
+
+    `detect(args)`: runs detection + tracking elsewhere (a job of the TaskQueue, infra/tasks.py)
+    and returns when its result is in the detection cache; without it the detector runs here."""
     label, name, legacy = file_names(args)
     stop = min(args.stop if args.stop is not None else len(seq), len(seq))
     want = range(args.start, stop)
@@ -110,24 +126,29 @@ def new_session(args, seq) -> AnnotationSession:
         split = None if args.folder else args.split
         meta = current_meta(args.threshold, sequence_mode(seq, args.fov), split)
         found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy)
+        if found is None and detect is not None:
+            detect(args)
+            found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy)
+            if found is None:
+                raise RuntimeError("detection finished, but its result is not in the detection cache")
         if found is not None:
             indices, results = found
         else:
-            from pipeline.detect_track import save_results, track_sequence
+            from pipeline.detect_track import track_sequence, write_results
 
             indices = want
             print(f"Detecting + tracking frames {indices.start}..{indices.stop - 1}")
             results = track_sequence(seq, indices, args.threshold, args.fov)
-            whole = indices.start == 0 and indices.stop == len(seq)
-            path = RESULTS_DIR / (f"{name}.json" if whole else f"{name}_f{indices.start}-{indices.stop}.json")
-            save_results(cache.output_path(path, meta), indices, results, meta)
+            blobs = results_blobs()
+            key = cache_key_name(name, indices, len(seq))
+            write_results(blobs, cache.output_key(blobs, key, meta), indices, results, meta)
     session = AnnotationSession.from_tracking(
         label, results, args.mode, frame_offset=indices.start)
     print(f"New {args.mode} session with {session.stats()['total']} system boxes in {len(indices)} frames")
     return session
 
 
-def prepare(args, store) -> tuple[object, str]:
+def prepare(args, store, detect=None) -> tuple[object, str]:
     """Make sure the session of `args` exists in `store`; returns (sequence, key).
 
     An existing session is resumed ("session_resume" is logged), one stored under its legacy key is
@@ -146,7 +167,7 @@ def prepare(args, store) -> tuple[object, str]:
         store.create(key, old)
         print(f"Resumed session {legacy} under its new name {key}")
         return seq, key
-    session = new_session(args, seq)
+    session = new_session(args, seq, detect)
     if store.exists(key):                                    # fresh: start over
         store.replace(key, session)
     else:

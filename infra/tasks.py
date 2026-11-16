@@ -1,0 +1,124 @@
+"""Background tasks, independent of the queue that runs them (ThreadTaskQueue or Celery workers).
+
+Each task is `fn(payload: dict, ctx: TaskContext) -> dict` (JSON-able result):
+    detect_track   gpu queue: detection + tracking of a sequence into the detection cache
+    export         cpu queue: label files of a session as a zip in the export BlobStore
+
+Tasks are idempotent (docs/adr/0015): detect_track first looks for a cache entry with the run's
+settings and returns it without loading a model; a run that is stopped (cancelled, or its worker
+died) writes nothing, because the cache entry is written once, atomically, at the end.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from argparse import Namespace
+from collections.abc import Callable
+from typing import Protocol
+
+from infra.blob import BlobStore, LocalBlobStore
+
+GPU, CPU = "gpu", "cpu"
+
+
+class TaskContext(Protocol):
+    def progress(self, fraction: float, message: str = "") -> None:
+        """Report progress (0..1); implementations throttle the writes."""
+
+    def should_stop(self) -> bool:
+        """True once the job was asked to stop (cooperative cancellation)."""
+
+
+class JobCancelled(Exception):
+    pass
+
+
+def results_blobs() -> BlobStore:
+    """The detection cache (results/, the same store the session builder reads)."""
+    from pipeline import session_builder
+
+    return session_builder.results_blobs()
+
+
+def export_blobs() -> BlobStore:
+    from pipeline import session_builder
+
+    return LocalBlobStore(session_builder.RESULTS_DIR / "exports")
+
+
+# ------------------------------------------------------------------ detect_track
+def detect_track_payload(args) -> dict:
+    """The JSON payload of a detect_track job for session-builder arguments."""
+    return {k: getattr(args, k) for k in ("folder", "data_root", "split", "sequence", "start", "stop", "threshold",
+                                         "fov", "use_cache_without_weights")}
+
+
+def detect_track(payload: dict, ctx: TaskContext) -> dict:
+    from detection.fov import sequence_mode
+    from infra.sequences import open_blob_sequence
+    from infra.worker_detector import get_detector
+    from pipeline.detect_track import (
+        Cancelled,
+        current_meta,
+        track_sequence,
+        write_results,
+    )
+    from pipeline.session_builder import _find_cached, cache_key_name, file_names
+    from verification import cache
+
+    args = Namespace(**payload)
+    seq = open_blob_sequence(args)
+    _, name, legacy = file_names(args)
+    stop = min(args.stop if args.stop is not None else len(seq), len(seq))
+    want = range(args.start, stop)
+    if len(want) == 0:
+        raise ValueError(f"Empty frame range {args.start}..{args.stop} (the sequence has {len(seq)} frames)")
+    meta = current_meta(args.threshold, sequence_mode(seq, args.fov), None if args.folder else args.split)
+    if _find_cached(name, want, meta, args.use_cache_without_weights, legacy) is not None:
+        ctx.progress(1.0, "found in the detection cache")
+        return {"cached": True, "frames": len(want)}
+    ctx.progress(0.0, "loading the detector")
+    detector = get_detector(meta, args.fov)
+    try:
+        results = track_sequence(seq, want, args.threshold, args.fov, detector=detector,
+                                 should_stop=ctx.should_stop, progress=lambda f: ctx.progress(f, "detecting"))
+    except Cancelled as exc:
+        raise JobCancelled(str(exc)) from None
+    blobs = results_blobs()
+    key = cache.output_key(blobs, cache_key_name(name, want, len(seq)), meta)
+    write_results(blobs, key, want, results, meta)
+    return {"cached": False, "frames": len(want), "cache_key": key}
+
+
+# ------------------------------------------------------------------------ export
+def export(payload: dict, ctx: TaskContext) -> dict:
+    """payload: session_key, revision (so an export of an older state is not reused), sequence
+    (session-builder arguments), format, include_unreviewed, include_empty, job_id."""
+    from export import export_session, zip_files
+    from infra.settings import make_session_store
+    from pipeline.session_builder import open_sequence
+
+    session = make_session_store().load(payload["session_key"])
+    seq = open_sequence(Namespace(**payload["sequence"]))
+    ctx.progress(0.2, "rendering labels")
+    result = export_session(session, seq, payload["format"], payload.get("include_unreviewed", False),
+                            payload.get("include_empty", False))
+    if ctx.should_stop():
+        raise JobCancelled("export cancelled")
+    data = zip_files(result.files)
+    key = f"{payload['job_id']}/{result.archive_name}"
+    export_blobs().put(key, data)
+    return {"blob": key, "archive_name": result.archive_name, "bytes": len(data),
+            "summary": result.summary.to_dict()}
+
+
+TASKS: dict[str, tuple[str, Callable[[dict, TaskContext], dict]]] = {
+    "detect_track": (GPU, detect_track),
+    "export": (CPU, export),
+}
+
+
+def dedupe_key(kind: str, payload: dict) -> str:
+    """Jobs with the same kind and payload are the same job: a duplicate submit returns the first."""
+    body = {k: v for k, v in payload.items() if k != "job_id"}
+    return hashlib.sha1(json.dumps([kind, body], sort_keys=True, default=str).encode()).hexdigest()[:24]

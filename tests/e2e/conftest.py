@@ -45,7 +45,8 @@ class AppServer:
 
     def start(self) -> None:
         port = _free_port()
-        env = {**os.environ, "LAL_RESULTS_DIR": str(self.results_dir), **self.extra_env}
+        env = {**os.environ, "LAL_RESULTS_DIR": str(self.results_dir),
+               "LAL_WORKER_DETECTOR_FACTORY": "tests.fakes:FakeDetector", **self.extra_env}
         self.proc = subprocess.Popen([sys.executable, "-m", "tests.e2e.app_server", str(port)],
                                      cwd=PROJECT_ROOT, env=env)
         self.url = f"http://127.0.0.1:{port}"

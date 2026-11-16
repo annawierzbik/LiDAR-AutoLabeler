@@ -85,6 +85,20 @@ docker compose -f docker-compose.db.yml down           # stop (dane zostają; -v
 
 Hasło `lal_local` dotyczy tylko lokalnego kontenera (inne: zmienna `LAL_DB_PASSWORD` przy starcie).
 
+### Kolejka zadań i workery (opcjonalnie)
+
+Domyślnie detekcja i eksport działają w wątkach serwera. Z Celery i Redisem (Redis jest w tym samym
+pliku compose) zadania wykonują osobne procesy; na Windows z pulą `solo`:
+
+```bash
+export LAL_JOB_QUEUE=celery LAL_REDIS_URL=redis://127.0.0.1:56379/0
+export LAL_DATABASE_URL=postgresql+psycopg://lal:lal_local@127.0.0.1:55432/lal
+python -m infra.migrate
+celery -A infra.celery_app worker -Q gpu -P solo -n gpu@%h    # detekcja + tracking (jeden model)
+celery -A infra.celery_app worker -Q cpu -P solo -n cpu@%h    # eksport (można uruchomić kilka)
+python -m scripts.web
+```
+
 ### Testy
 
 ```bash
@@ -92,6 +106,7 @@ pytest                                  # testy jednostkowe
 pytest tests/test_experiments           # testy eksperymentów
 pytest -m postgres                      # testy z bazą (wymaga docker-compose.db.yml)
 pytest -m e2e                           # testy w przeglądarce (requirements-dev.txt, Chromium)
+pytest -m worker                        # prawdziwe procesy workerów Celery (Redis + PostgreSQL)
 pytest -m gpu                           # testy z prawdziwym modelem (GPU, OpenPCDet, dane KITTI)
 ```
 

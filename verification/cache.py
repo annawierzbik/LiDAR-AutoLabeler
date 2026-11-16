@@ -136,97 +136,132 @@ def weights_missing(current: dict) -> bool:
     return current.get("checkpoint_hash") is None
 
 
-def warn_once(path: Path, text: str) -> None:
-    key = f"{Path(path).resolve()}|{text}"
+def warn_once(where, text: str) -> None:
+    key = f"{where}|{text}"
     if key not in _warned:
         _warned.add(key)
         print(f"WARNING: {text}")
 
 
-def warn_legacy(path: Path) -> None:
-    warn_once(path, f"{Path(path).name} has no settings metadata (written before cache format "
-                    f"{CACHE_FORMAT_VERSION}); reusing it, but it may come from another detector, "
-                    "checkpoint, threshold, FOV crop or tracker. Delete it to recompute.")
+def warn_legacy(where, name: str) -> None:
+    warn_once(where, f"{name} has no settings metadata (written before cache format "
+                     f"{CACHE_FORMAT_VERSION}); reusing it, but it may come from another detector, "
+                     "checkpoint, threshold, FOV crop or tracker. Delete it to recompute.")
 
 
-def warn_mismatch(path: Path, stored: dict, current: dict) -> None:
-    warn_once(path, f"{Path(path).name} was made with other settings ({'; '.join(differences(stored, current))}); "
-                    "not reused, recomputing.")
+def warn_mismatch(where, name: str, stored: dict, current: dict) -> None:
+    warn_once(where, f"{name} was made with other settings ({'; '.join(differences(stored, current))}); "
+                     "not reused, recomputing.")
 
 
-def choose(candidates, current: dict, usable=lambda data: True,
-           allow_missing_weights: bool = False) -> tuple[Path, dict] | None:
-    """(path, loaded JSON) of the cache file to reuse, or None.
-
-    The first usable candidate made with the `current` settings wins; otherwise the first usable
-    file without metadata (with a warning; only for the split "training" or a folder); otherwise
-    None, after a warning for every usable file made with other settings.
-    If the checkpoint is missing on disk its fingerprint cannot be compared: that is said explicitly,
-    and with `allow_missing_weights` a file that matches in everything else is used."""
+def _choose(items, current: dict, usable, allow_missing_weights: bool):
+    """items: (ref, name, where, read) with read() -> loaded JSON or None. Returns (ref, data) or None."""
     no_weights = weights_missing(current)
     ignore = ("checkpoint_hash",) if no_weights and allow_missing_weights else ()
     legacy, mismatched, unchecked, skipped = None, [], [], []
-    for path in candidates:
-        path = Path(path)
-        if not path.is_file():
-            continue
-        data = json.loads(path.read_text())
-        if not usable(data):
+    for ref, name, where, read in items:
+        data = read()
+        if data is None or not usable(data):
             continue
         stored = data.get("meta")
         if stored is None:
             if current.get("split") not in LEGACY_SPLITS:
-                text = (f"{path.name} has no settings metadata; such files are only used for "
+                text = (f"{name} has no settings metadata; such files are only used for "
                         f"the split 'training', not '{current.get('split')}'.")
-                skipped.append((path, text))
+                skipped.append((where, text))
             elif current.get("fov") != LEGACY_FOV:
-                text = (f"{path.name} has no settings metadata, so it was made without a FOV "
+                text = (f"{name} has no settings metadata, so it was made without a FOV "
                         f"crop; not used with the crop {current.get('fov')!r} (--fov none reuses it).")
-                skipped.append((path, text))
+                skipped.append((where, text))
             else:
-                legacy = legacy or (path, data)
+                legacy = legacy or (ref, name, where, data)
         elif differences(stored, current, ignore):
             if no_weights and not differences(stored, current, ("checkpoint_hash",)):
-                unchecked.append(path)
+                unchecked.append((where, name))
             else:
-                mismatched.append((path, stored))
+                mismatched.append((where, name, stored))
         else:
             if ignore:
-                warn_once(path, f"checkpoint {current['checkpoint']} is missing on disk; using {path.name} "
-                                "without checking that it was made with these weights "
-                                "(--use-cache-without-weights).")
-            return path, data
+                warn_once(where, f"checkpoint {current['checkpoint']} is missing on disk; using {name} "
+                                 "without checking that it was made with these weights "
+                                 "(--use-cache-without-weights).")
+            return ref, data
     if legacy is not None:
-        warn_legacy(legacy[0])
-        return legacy
-    for path, text in skipped:
-        warn_once(path, text)
-    for path in unchecked:
-        warn_once(path, f"checkpoint {current['checkpoint']} is missing on disk, so {path.name} cannot be "
-                        "checked against it (everything else matches). Restore the checkpoint, or pass "
-                        "--use-cache-without-weights to use the cache anyway.")
-    for path, stored in mismatched:
-        warn_mismatch(path, stored, current)
+        warn_legacy(legacy[2], legacy[1])
+        return legacy[0], legacy[3]
+    for where, text in skipped:
+        warn_once(where, text)
+    for where, name in unchecked:
+        warn_once(where, f"checkpoint {current['checkpoint']} is missing on disk, so {name} cannot be "
+                         "checked against it (everything else matches). Restore the checkpoint, or pass "
+                         "--use-cache-without-weights to use the cache anyway.")
+    for where, name, stored in mismatched:
+        warn_mismatch(where, name, stored, current)
     return None
 
 
+def choose_blob(blobs, keys, current: dict, usable=lambda data: True,
+                allow_missing_weights: bool = False) -> tuple[str, dict] | None:
+    """(key, loaded JSON) of the cache blob to reuse, or None.
+
+    The first usable candidate made with the `current` settings wins; otherwise the first usable
+    blob without metadata (with a warning; only for the split "training" or a folder); otherwise
+    None, after a warning for every usable blob made with other settings.
+    If the checkpoint is missing on disk its fingerprint cannot be compared: that is said explicitly,
+    and with `allow_missing_weights` a blob that matches in everything else is used."""
+    def reader(key):
+        def read():
+            try:
+                return json.loads(blobs.get(key))
+            except KeyError:
+                return None
+        return read
+
+    root = getattr(blobs, "root", "")
+    return _choose([(k, Path(k).name, f"{root}/{k}", reader(k)) for k in keys], current, usable,
+                   allow_missing_weights)
+
+
+def choose(candidates, current: dict, usable=lambda data: True,
+           allow_missing_weights: bool = False) -> tuple[Path, dict] | None:
+    """`choose_blob` for file paths (path, loaded JSON); kept for callers that work with paths."""
+    def reader(path):
+        def read():
+            return json.loads(path.read_text()) if path.is_file() else None
+        return read
+
+    items = [(Path(c), Path(c).name, str(Path(c).resolve()), reader(Path(c))) for c in candidates]
+    return _choose(items, current, usable, allow_missing_weights)
+
+
+def output_key(blobs, key: str, current: dict) -> str:
+    """Where to write results made with `current`: `key`, unless a blob with other or unknown
+    settings is already there; then <stem>_c<config key><suffix> next to it (the old one is kept)."""
+    try:
+        stored = json.loads(blobs.get(key)).get("meta")
+    except KeyError:
+        return key
+    except ValueError:
+        stored = None
+    return keyed_key(key, current) if stored is None or differences(stored, current) else key
+
+
+def keyed_key(key: str, current: dict) -> str:
+    stem, dot, suffix = key.rpartition(".")
+    return f"{stem}_c{config_key(current)}{dot}{suffix}" if dot else f"{key}_c{config_key(current)}"
+
+
 def output_path(path: Path, current: dict) -> Path:
-    """Where to write results made with `current`: `path`, unless a file with other or unknown
-    settings is already there; then <stem>_c<key><suffix> next to it (the old file is kept)."""
+    """`output_key` for a file path."""
+    from infra.blob import LocalBlobStore
+
     path = Path(path)
-    if path.exists():
-        try:
-            stored = json.loads(path.read_text()).get("meta")
-        except (OSError, ValueError):
-            stored = None
-        if stored is None or differences(stored, current):
-            return keyed_path(path, current)
-    return path
+    return path.with_name(output_key(LocalBlobStore(path.parent), path.name, current))
 
 
 def keyed_path(path: Path, current: dict) -> Path:
     path = Path(path)
-    return path.with_name(f"{path.stem}_c{config_key(current)}{path.suffix}")
+    return path.with_name(keyed_key(path.name, current))
 
 
 def is_cache_name(stem: str, name: str) -> bool:

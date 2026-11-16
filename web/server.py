@@ -4,13 +4,17 @@
     GET  /annotate?sid=<id>         the annotation page of one open session
     GET  /static/...                vendored assets (three.js 0.160.0, Schibsted Grotesk), no CDN
     POST /api/folder/open           {"path": "..."}              -> {"sid"}
-    GET  /api/jobs/<sid>            loading | ready | error  (404 once the job failed or was finished)
+    GET  /api/jobs/<sid>            loading (with detection progress) | ready | error  (404 once failed / finished)
+    POST /api/jobs/<sid>/cancel     stop opening the session (the detection task stops at the next frame)
     GET  /api/s/<sid>/state?frame=  boxes of that frame, stats, timeline marks, save_error, revision
     GET  /api/s/<sid>/next_pending?frame=   {"frame": next frame with boxes to review, or null}
     GET  /api/s/<sid>/points/<i>    point cloud of frame i, raw float32 xyz
     POST /api/s/<sid>/action        {"name": "accept", "frame": 3, "index": 1} ... -> state + "result"
     POST /api/s/<sid>/heartbeat     keep this tab's lock on the session (the page sends one every 30 s)
     POST /api/s/<sid>/finish        release the session and mark it finished
+    POST /api/s/<sid>/export_jobs   {"format", "include_unreviewed", "include_empty"} -> {"task_id"}
+    GET  /api/tasks/<id>            state, progress, message, result of a background task
+    GET  /api/tasks/<id>/download   the zip of a finished export task
 
 Actions name their target explicitly (docs/adr/0001-explicit-target-actions.md); the server keeps
 no current frame or selection, and loads the session document for every request (docs/adr/0011).
@@ -44,6 +48,12 @@ class Action(BaseModel):
 
 class FolderRequest(BaseModel):
     path: str
+
+
+class ExportRequest(BaseModel):
+    format: str = "lidar"
+    include_unreviewed: bool = False
+    include_empty: bool = False
 
 
 def create_app(manager: SessionManager) -> FastAPI:
@@ -81,6 +91,36 @@ def create_app(manager: SessionManager) -> FastAPI:
             return manager.job(sid).view()
         except KeyError:
             raise HTTPException(404, f"unknown session {sid}")
+
+    @app.post("/api/jobs/{sid}/cancel")
+    def cancel_job(sid: str):
+        try:
+            return {"cancelled": manager.cancel(sid)}
+        except KeyError:
+            raise HTTPException(404, f"unknown session {sid}")
+
+    # -------------------------------------------------------------- tasks
+    def task_view(task_id: str) -> dict:
+        try:
+            t = manager.task(task_id)
+        except KeyError:
+            raise HTTPException(404, f"unknown task {task_id}")
+        return {"id": t.id, "kind": t.kind, "title": t.title, "state": t.state, "progress": t.progress,
+                "message": t.message, "attempts": t.attempts, "result": t.result}
+
+    @app.get("/api/tasks/{task_id}")
+    def task(task_id: str):
+        return task_view(task_id)
+
+    @app.get("/api/tasks/{task_id}/download")
+    def task_download(task_id: str):
+        task_view(task_id)
+        try:
+            name, data = manager.task_file(task_id)
+        except LookupError as exc:
+            raise HTTPException(409, str(exc))
+        return Response(data, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     # -------------------------------------------------------------- one session
     @app.get("/api/s/{sid}/state")
@@ -152,6 +192,17 @@ def create_app(manager: SessionManager) -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
         return Response(zip_files(result.files), media_type="application/zip",
                         headers={"Content-Disposition": f'attachment; filename="{result.archive_name}"'})
+
+    @app.post("/api/s/{sid}/export_jobs")
+    def export_job(sid: str, r: ExportRequest):
+        if r.format not in FORMATS:
+            raise HTTPException(400, f"unknown export format '{r.format}' (use one of: {', '.join(FORMATS)})")
+        try:
+            return {"task_id": manager.export_job(sid, r.format, r.include_unreviewed, r.include_empty)}
+        except KeyError:
+            raise HTTPException(404, f"unknown session {sid}")
+        except LookupError as exc:
+            raise HTTPException(409, str(exc))
 
     @app.post("/api/s/{sid}/finish")
     def finish(sid: str):

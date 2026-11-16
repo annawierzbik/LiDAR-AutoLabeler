@@ -22,7 +22,7 @@ class Builder:
     def __init__(self, tmp_path, fail=None):
         self.tmp, self.calls, self.fail = tmp_path, [], fail
 
-    def __call__(self, args, store):
+    def __call__(self, args, store, detect=None):
         self.calls.append(args)
         if self.fail:
             raise RuntimeError(self.fail)

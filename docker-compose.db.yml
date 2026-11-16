@@ -1,7 +1,9 @@
-# PostgreSQL only, for local work and the database tests (pytest -m postgres).
+# PostgreSQL and Redis for local work and the tests (pytest -m postgres, pytest -m worker).
 #   docker compose -f docker-compose.db.yml up -d
 #   docker compose -f docker-compose.db.yml down          # keeps the data volume (add -v to delete it)
 # The password is for this local container only; set LAL_DB_PASSWORD to choose another.
+# Both ports are bound to 127.0.0.1 only. Redis is the Celery broker (no persistence needed:
+# job state lives in the jobs table).
 name: lidar-autolabeler-db
 
 services:
@@ -17,6 +19,17 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U lal -d lal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4.1-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:56379:6379"        # host port 56379 so a local Redis on 6379 does not clash
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 30

@@ -26,7 +26,18 @@ class Settings(BaseSettings):
     database_url: str | None = None           # e.g. postgresql+psycopg://lal:<password>@localhost:55432/lal
     lock_ttl_seconds: float = 120.0           # a session lock expires without a heartbeat for this long
     blob_store: Literal["local"] = "local"
-    job_queue: Literal["thread"] = "thread"
+    # background jobs (detection + tracking on the gpu queue, export on the cpu queue), docs/adr/0015
+    job_queue: Literal["thread", "celery"] = "thread"   # celery needs LAL_REDIS_URL and LAL_DATABASE_URL
+    redis_url: str | None = None              # e.g. redis://127.0.0.1:56379/0
+    celery_visibility_timeout: float = 3600.0  # seconds before Redis hands an unacknowledged job to another worker
+    job_heartbeat_seconds: float = 2.0        # progress / heartbeat written at most this often
+    job_stale_seconds: float = 60.0           # a running job without a heartbeat this long is considered lost
+    job_max_attempts: int = 3                 # runs of a job before a lost worker makes it fail
+    # the one detector configuration a worker process loads (once)
+    worker_detector_factory: str = "detection.detector:Detector"
+    worker_detector_config: Path | None = None       # default: detection.paths.DEFAULT_CFG
+    worker_detector_checkpoint: Path | None = None   # default: detection.paths.DEFAULT_CKPT
+    worker_score_threshold: float = 0.5
 
     @field_validator("results_dir")
     @classmethod
@@ -57,3 +68,21 @@ def make_session_store(settings: Settings | None = None):
     from infra.sessions import FileSessionStore
 
     return FileSessionStore(settings.session_dir, lock_ttl=settings.lock_ttl_seconds)
+
+
+def make_task_queue(settings: Settings | None = None):
+    """The TaskQueue chosen by LAL_JOB_QUEUE: "thread" (default, in this process) or "celery"
+    (worker processes; needs LAL_REDIS_URL and LAL_DATABASE_URL)."""
+    settings = settings or get_settings()
+    if settings.job_queue == "celery":
+        if not (settings.redis_url and settings.database_url):
+            raise ValueError("LAL_JOB_QUEUE=celery needs LAL_REDIS_URL and LAL_DATABASE_URL")
+        from infra.celery_queue import CeleryTaskQueue
+        from infra.db import make_engine
+        from infra.pg_jobs import PgJobStore
+
+        return CeleryTaskQueue(PgJobStore(make_engine(settings.database_url), stale_seconds=settings.job_stale_seconds,
+                                          max_attempts=settings.job_max_attempts))
+    from infra.jobs import ThreadTaskQueue
+
+    return ThreadTaskQueue()
