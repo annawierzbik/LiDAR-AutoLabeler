@@ -12,10 +12,6 @@ from infra.jobs import JobQueue, ThreadJobQueue
 from infra.points import BlobPointSource, point_source
 from infra.sessions import (
     FileSessionStore,
-    RevisionConflict,
-    SessionLocked,
-    SessionNotFound,
-    SessionStore,
 )
 from infra.settings import PROJECT_ROOT, Settings
 from verification.session import AnnotationSession
@@ -77,47 +73,10 @@ def test_blob_point_source_reads_frames_like_the_loader(tmp_path):
 
 
 # --------------------------------------------------------------- sessions
+# load / create / save / events / locks: tests/test_infra/test_session_store_contract.py (both stores)
 @pytest.fixture
 def store(tmp_path):
     return FileSessionStore(tmp_path)
-
-
-def session():
-    return AnnotationSession.from_tracking("0000", [[box(10)], [box(11)]])
-
-
-def test_file_session_store_save_load_list(store):
-    assert isinstance(store, SessionStore)
-    s = session()
-    store.save("a", s, expected_revision=0)
-    assert store.list() == ["a"] and store.load("a").num_frames == 2
-    with pytest.raises(SessionNotFound):
-        store.load("b")
-
-
-def test_save_with_a_stale_revision_is_a_conflict(store):
-    s = session()
-    store.save("a", s, expected_revision=0)
-    s.accept(0, 0)
-    store.save("a", s, expected_revision=0)                          # stored 0 -> now 1
-    stale = store.load("a")
-    stale.revision = 0
-    with pytest.raises(RevisionConflict) as err:
-        store.save("a", stale, expected_revision=0)
-    assert err.value.stored == 1 and err.value.expected == 0
-    store.save("a", stale, expected_revision=None)                   # explicit overwrite
-
-
-def test_lock_is_exclusive_per_owner(store):
-    store.lock("a", "tab1")
-    store.lock("a", "tab1")                                          # re-entrant for the same owner
-    with pytest.raises(SessionLocked) as err:
-        store.lock("a", "tab2")
-    assert err.value.owner == "tab1" and store.locked_by("a") == "tab1"
-    store.unlock("a", "tab2")                                        # not the owner: nothing happens
-    assert store.locked_by("a") == "tab1"
-    store.unlock("a", "tab1")
-    store.lock("a", "tab2")
 
 
 def test_store_keys_are_plain_names(store, tmp_path):
@@ -188,6 +147,8 @@ def test_settings_from_environment(monkeypatch, tmp_path):
     assert Settings().results_dir == PROJECT_ROOT / "relative" / "res"
 
 
-def test_session_files_are_json(store):
-    store.save("a", session(), expected_revision=0)
-    assert json.loads(store.path("a").read_text())["version"] == 2
+def test_session_files_are_json_v2_with_their_events(store):
+    s = AnnotationSession.from_tracking("0000", [[box(10)], [box(11)]])
+    store.create("a", s)
+    data = json.loads(store.path("a").read_text())
+    assert data["version"] == 2 and data["events"] and "revision" in data

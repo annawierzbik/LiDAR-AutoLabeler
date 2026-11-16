@@ -7,7 +7,8 @@ WARNING: the server has no authentication. Anyone who can reach it can open ANY 
 server's disk by typing its path, read its point clouds and write results. Only use
 --host 0.0.0.0 (or any non-local address) on a network you trust.
 
-The start screen annotates a folder of .bin frames; sessions are autosaved to results/sessions/.
+The start screen annotates a folder of .bin frames. Sessions are stored in results/sessions/
+(LAL_SESSION_STORE=file, the default) or in PostgreSQL (LAL_SESSION_STORE=postgres, LAL_DATABASE_URL).
 Run it from the project root so data/ and results/ are found.
 """
 from __future__ import annotations
@@ -47,12 +48,8 @@ def main() -> None:
     print(f"Open {url}   (Ctrl+C to stop)")
     if not args.no_browser:
         webbrowser.open(url)
-    try:
-        uvicorn.run(create_app(manager), host=args.host, port=args.port, log_level="warning")
-    finally:
-        for job in manager.jobs.values():
-            if job.service is not None:
-                job.service.save()
+    uvicorn.run(create_app(manager), host=args.host, port=args.port, log_level="warning")
+    # nothing to save on exit: every request stores its changes before it answers
 
 
 if __name__ == "__main__":

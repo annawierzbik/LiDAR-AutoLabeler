@@ -1,0 +1,25 @@
+# PostgreSQL only, for local work and the database tests (pytest -m postgres).
+#   docker compose -f docker-compose.db.yml up -d
+#   docker compose -f docker-compose.db.yml down          # keeps the data volume (add -v to delete it)
+# The password is for this local container only; set LAL_DB_PASSWORD to choose another.
+name: lidar-autolabeler-db
+
+services:
+  db:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: lal
+      POSTGRES_PASSWORD: ${LAL_DB_PASSWORD:-lal_local}
+      POSTGRES_DB: lal
+    ports:
+      - "127.0.0.1:55432:5432"        # host port 55432 so a local PostgreSQL on 5432 does not clash
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lal -d lal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

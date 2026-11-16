@@ -9,10 +9,13 @@
     GET  /api/s/<sid>/next_pending?frame=   {"frame": next frame with boxes to review, or null}
     GET  /api/s/<sid>/points/<i>    point cloud of frame i, raw float32 xyz
     POST /api/s/<sid>/action        {"name": "accept", "frame": 3, "index": 1} ... -> state + "result"
-    POST /api/s/<sid>/finish        save and close the session
+    POST /api/s/<sid>/heartbeat     keep this tab's lock on the session (the page sends one every 30 s)
+    POST /api/s/<sid>/finish        release the session and mark it finished
 
 Actions name their target explicitly (docs/adr/0001-explicit-target-actions.md); the server keeps
-no current frame or selection.
+no current frame or selection, and loads the session document for every request (docs/adr/0011).
+409: the session is still loading, was finished, was taken over by another tab, or was changed
+by someone else since it was loaded (revision conflict: reload the frame and try again).
 """
 from __future__ import annotations
 
@@ -24,8 +27,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from export import FORMATS, ExportError, zip_files
+from infra.sessions import RevisionConflict
 from web.manager import SessionManager
-from web.service import SessionClosed, UnknownAction
+from web.service import UnknownAction
 
 STATIC = Path(__file__).parent / "static"
 
@@ -96,9 +100,23 @@ def create_app(manager: SessionManager) -> FastAPI:
     @app.get("/api/s/{sid}/points/{frame}")
     def points(sid: str, frame: int):
         try:
-            return Response(service(sid).points(frame), media_type="application/octet-stream")
+            return Response(manager.points(sid, frame), media_type="application/octet-stream")
+        except KeyError:
+            raise HTTPException(404, f"unknown session {sid}")
         except IndexError:
             raise HTTPException(404, f"no frame {frame}")
+        except LookupError as exc:
+            raise HTTPException(409, str(exc))
+
+    @app.post("/api/s/{sid}/heartbeat")
+    def heartbeat(sid: str):
+        try:
+            manager.heartbeat(sid)
+        except KeyError:
+            raise HTTPException(404, f"unknown session {sid}")
+        except LookupError as exc:
+            raise HTTPException(409, str(exc))
+        return {"ok": True, "lock_ttl": manager.store.lock_ttl}
 
     @app.post("/api/s/{sid}/action")
     def action(sid: str, a: Action):
@@ -106,7 +124,7 @@ def create_app(manager: SessionManager) -> FastAPI:
             return service(sid).act(a.name, frame=a.frame, index=a.index, track_id=a.track_id, label=a.label)
         except UnknownAction:
             raise HTTPException(400, f"unknown action '{a.name}'")
-        except SessionClosed as exc:
+        except RevisionConflict as exc:
             raise HTTPException(409, str(exc))
         except (ValueError, TypeError) as exc:
             raise HTTPException(400, str(exc))
@@ -137,8 +155,12 @@ def create_app(manager: SessionManager) -> FastAPI:
 
     @app.post("/api/s/{sid}/finish")
     def finish(sid: str):
-        service(sid)
-        manager.finish(sid)
+        try:
+            manager.finish(sid)
+        except KeyError:
+            raise HTTPException(404, f"unknown session {sid}")
+        except LookupError as exc:
+            raise HTTPException(409, str(exc))
         return {"ok": True}
 
     return app

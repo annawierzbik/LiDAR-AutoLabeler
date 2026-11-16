@@ -16,18 +16,20 @@ def box(x=10.0, tid=0):
 
 
 class Builder:
-    """Stands in for pipeline.session_builder.build_session: no detector, no data."""
+    """Stands in for pipeline.session_builder.prepare: no detector, no data. Makes the session in
+    the store unless it exists (then it is resumed), returns (sequence, key)."""
 
     def __init__(self, tmp_path, fail=None):
         self.tmp, self.calls, self.fail = tmp_path, [], fail
 
-    def __call__(self, args):
+    def __call__(self, args, store):
         self.calls.append(args)
         if self.fail:
             raise RuntimeError(self.fail)
-        name = f"{folder_key(args.folder) if args.folder else args.sequence}_{args.mode}_{args.start}"
-        return AnnotationSession.from_tracking("0000", [[box()], [box(11)]], args.mode), \
-            FakeLoader(), self.tmp / f"{name}.json"
+        key = f"{folder_key(args.folder) if args.folder else args.sequence}_{args.mode}_{args.start}"
+        if not store.exists(key):
+            store.create(key, AnnotationSession.from_tracking("0000", [[box()], [box(11)]], args.mode))
+        return FakeLoader(), key
 
 
 @pytest.fixture
@@ -35,9 +37,17 @@ def builder(tmp_path):
     return Builder(tmp_path)
 
 
-def manager(tmp_path, builder):
-    """Sessions are stored where the Builder puts the session files."""
-    return SessionManager(builder=builder, background=False, store=FileSessionStore(tmp_path))
+class Clock:
+    def __init__(self):
+        self.t = 1_000_000.0
+
+    def __call__(self):
+        return self.t
+
+
+def manager(tmp_path, builder, clock=None):
+    return SessionManager(builder=builder, background=False,
+                          store=FileSessionStore(tmp_path, lock_ttl=120, clock=clock or Clock()))
 
 
 @pytest.fixture
@@ -114,16 +124,40 @@ def test_finish_saves_and_removes_the_job(mgr, tmp_path):
     assert mgr.store.locked_by(svc.key) is None
 
 
-def test_finished_session_accepts_no_more_actions(mgr, tmp_path):
+def test_finished_session_accepts_no_more_requests(mgr, tmp_path):
     sid = mgr.open_folder(str(make_folder(tmp_path)))
-    svc = mgr.service(sid)
+    key = mgr.service(sid).key
     mgr.finish(sid)
-    saved = mgr.store.path(svc.key).read_text()
-    with pytest.raises(LookupError, match="finished"):
-        mgr.service(sid)                            # not KeyError: the API answers 409, not 404
-    with pytest.raises(LookupError):
-        svc.act("add", frame=0, label="Car")        # a stale reference cannot change it either
-    assert mgr.store.path(svc.key).read_text() == saved
+    saved = mgr.store.path(key).read_text()
+    for call in (lambda: mgr.service(sid), lambda: mgr.heartbeat(sid), lambda: mgr.points(sid, 0)):
+        with pytest.raises(LookupError, match="finished"):
+            call()                                  # not KeyError: the API answers 409, not 404
+    assert mgr.store.path(key).read_text() == saved
+
+
+def test_no_review_service_is_kept_between_requests(mgr, tmp_path):
+    sid = mgr.open_folder(str(make_folder(tmp_path)))
+    a, b = mgr.service(sid), mgr.service(sid)
+    assert a is not b and a.session is not b.session
+    a.act("accept", frame=0, index=0)
+    assert mgr.service(sid).state(0)["stats"]["accepted"] == 1    # every request reads the store
+
+
+def test_lock_expires_without_heartbeats_and_the_old_tab_gets_409(tmp_path):
+    clock = Clock()
+    mgr = manager(tmp_path, Builder(tmp_path), clock)
+    folder = str(make_folder(tmp_path))
+    a = mgr.open_folder(folder)
+    clock.t += 100
+    mgr.heartbeat(a)                                # keeps it
+    clock.t += 100
+    assert mgr.job(mgr.open_folder(folder)).status == "error"     # still held (100 s since the heartbeat)
+    clock.t += 30                                   # 130 s without a heartbeat: the tab was closed
+    b = mgr.open_folder(folder)
+    assert mgr.job(b).status == "ready"
+    with pytest.raises(LookupError, match="open in another tab"):
+        mgr.service(a)                              # the old tab learns it lost the session
+    mgr.service(b).act("add", frame=0, label="Car")
 
 
 def test_reopening_a_finished_folder_gives_a_fresh_service(mgr, tmp_path):

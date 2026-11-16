@@ -75,30 +75,28 @@ def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool
     return want, results[offset: offset + len(want)]
 
 
-def build_session(args):
-    """Load (resume) or create the session for `args`. Returns (session, sequence loader, session path).
-
-    --start/--stop select a part of the sequence. In manual mode no detector is run at all,
-    so you can start drawing immediately (and it works without a GPU)."""
+def open_sequence(args):
+    """The SequenceLoader (KITTI) or FolderSequence (--folder) of `args`."""
     if args.folder:
         from ingestion.folder import FolderSequence
 
-        seq = FolderSequence(args.folder)
-    else:
-        seq = SequenceLoader(Path(args.data_root), args.split, args.sequence)
+        return FolderSequence(args.folder)
+    return SequenceLoader(Path(args.data_root), args.split, args.sequence)
+
+
+def session_keys(args) -> tuple[str, str | None]:
+    """(key, legacy key) of the session of `args` in a SessionStore: the session file name without
+    .json (<file key>[_f<a>-<b>]_<mode>); the legacy key is the name used before the split was part
+    of it (KITTI training sequences only, docs/adr/0006)."""
+    _, name, legacy = file_names(args)
+    key = session_file(name, args.mode, args.start, args.stop).stem
+    return key, (session_file(legacy, args.mode, args.start, args.stop).stem if legacy else None)
+
+
+def new_session(args, seq) -> AnnotationSession:
+    """A new session from cached detections, or after running detection + tracking (assisted), or
+    empty (manual: no detector at all, so it works without a GPU). --start/--stop select a part."""
     label, name, legacy = file_names(args)
-    session_path = session_file(name, args.mode, args.start, args.stop)
-
-    if not args.fresh:
-        legacy_path = session_file(legacy, args.mode, args.start, args.stop) if legacy else None
-        source = session_path if session_path.exists() else (
-            legacy_path if legacy_path is not None and legacy_path.exists() else None)
-        if source is not None:
-            session = AnnotationSession.load(source)
-            moved = "" if source == session_path else f" (from the old file name; now saved as {session_path.name})"
-            print(f"Resumed session {source}{moved} ({session.stats()['reviewed']} boxes reviewed)")
-            return session, seq, session_path
-
     stop = min(args.stop if args.stop is not None else len(seq), len(seq))
     want = range(args.start, stop)
     if len(want) == 0:
@@ -126,4 +124,61 @@ def build_session(args):
     session = AnnotationSession.from_tracking(
         label, results, args.mode, frame_offset=indices.start)
     print(f"New {args.mode} session with {session.stats()['total']} system boxes in {len(indices)} frames")
-    return session, seq, session_path
+    return session
+
+
+def prepare(args, store) -> tuple[object, str]:
+    """Make sure the session of `args` exists in `store`; returns (sequence, key).
+
+    An existing session is resumed ("session_resume" is logged), one stored under its legacy key is
+    copied to the new key (with its event log), otherwise a new one is made (new_session). With
+    args.fresh an existing session is replaced by a new one."""
+    from infra.sessions import SessionExists
+
+    seq = open_sequence(args)
+    key, legacy = session_keys(args)
+    if store.exists(key) and not args.fresh:
+        store.append_events(key, [_resume_event()])
+        return seq, key
+    if legacy and store.exists(legacy) and not args.fresh:
+        old = store.load(legacy)
+        old.events = store.events(legacy) + [_resume_event()]
+        store.create(key, old)
+        print(f"Resumed session {legacy} under its new name {key}")
+        return seq, key
+    session = new_session(args, seq)
+    if store.exists(key):                                    # fresh: start over
+        store.save(key, session, expected_revision=None)
+    else:
+        try:
+            store.create(key, session)
+        except SessionExists:                                # another tab made it meanwhile: use that one
+            pass
+    return seq, key
+
+
+def _resume_event():
+    import time
+
+    from verification.session import Event
+
+    return Event(time.time(), "session_resume")
+
+
+def build_session(args):
+    """Load (resume) or create the session for `args` from the session files. Returns (session,
+    sequence loader, session path). The web server uses `prepare` with its SessionStore instead."""
+    seq = open_sequence(args)
+    _, name, legacy = file_names(args)
+    session_path = session_file(name, args.mode, args.start, args.stop)
+
+    if not args.fresh:
+        legacy_path = session_file(legacy, args.mode, args.start, args.stop) if legacy else None
+        source = session_path if session_path.exists() else (
+            legacy_path if legacy_path is not None and legacy_path.exists() else None)
+        if source is not None:
+            session = AnnotationSession.load(source)
+            moved = "" if source == session_path else f" (from the old file name; now saved as {session_path.name})"
+            print(f"Resumed session {source}{moved} ({session.stats()['reviewed']} boxes reviewed)")
+            return session, seq, session_path
+    return new_session(args, seq), seq, session_path

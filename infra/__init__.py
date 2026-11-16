@@ -1,5 +1,5 @@
 """Storage, job and settings abstractions behind the web layer (see docs/adr/).
 
-Only local implementations exist so far: FileSessionStore, LocalBlobStore, ThreadJobQueue. They
-reproduce the single-process behaviour; other backends implement the same protocols.
+SessionStore: FileSessionStore (default) and PgSessionStore (LAL_SESSION_STORE=postgres).
+BlobStore: LocalBlobStore. JobQueue: ThreadJobQueue. Settings: LAL_* environment variables.
 """

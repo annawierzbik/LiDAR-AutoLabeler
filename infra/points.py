@@ -5,6 +5,8 @@ order the ingestion loaders use (natural sort, ingestion.folder.frame_files).
 """
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -57,3 +59,27 @@ def point_source(sequence) -> PointSource:
     from ingestion.folder import frame_files
 
     return BlobPointSource(LocalBlobStore(folder), [p.name for p in frame_files(folder)])
+
+
+class PointCache:
+    """Thread-safe LRU of encoded point clouds, shared by all requests of one process (a cache only:
+    any process can rebuild every entry from the point source)."""
+
+    def __init__(self, max_items: int = 64) -> None:
+        self.max_items = max_items
+        self._items: OrderedDict = OrderedDict()
+        self._mutex = threading.Lock()
+
+    def get(self, key):
+        with self._mutex:
+            if key not in self._items:
+                return None
+            self._items.move_to_end(key)
+            return self._items[key]
+
+    def put(self, key, value) -> None:
+        with self._mutex:
+            self._items[key] = value
+            self._items.move_to_end(key)
+            while len(self._items) > self.max_items:
+                self._items.popitem(last=False)

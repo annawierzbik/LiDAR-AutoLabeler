@@ -70,6 +70,31 @@ python -m scripts.export_labels --session results/sessions/<plik>.json --folder 
 Aplikacja desktopowa (okno Open3D) została usunięta; jedynym interfejsem jest przeglądarka
 (`docs/adr/0009-remove-desktop-application.md`).
 
+### Sesje w PostgreSQL (opcjonalnie)
+
+Domyślnie sesje są plikami w `results/sessions/`. Baza PostgreSQL działa w Dockerze:
+
+```bash
+docker compose -f docker-compose.db.yml up -d          # start bazy (port 55432 na localhost)
+export LAL_DATABASE_URL=postgresql+psycopg://lal:lal_local@127.0.0.1:55432/lal
+python -m infra.migrate                                # migracje Alembic (schemat)
+python -m scripts.import_sessions                      # jednorazowy import sesji z results/sessions/
+LAL_SESSION_STORE=postgres python -m scripts.web       # serwer z sesjami w bazie
+docker compose -f docker-compose.db.yml down           # stop (dane zostają; -v usuwa wolumen)
+```
+
+Hasło `lal_local` dotyczy tylko lokalnego kontenera (inne: zmienna `LAL_DB_PASSWORD` przy starcie).
+
+### Testy
+
+```bash
+pytest                                  # testy jednostkowe
+pytest tests/test_experiments           # testy eksperymentów
+pytest -m postgres                      # testy z bazą (wymaga docker-compose.db.yml)
+pytest -m e2e                           # testy w przeglądarce (requirements-dev.txt, Chromium)
+pytest -m gpu                           # testy z prawdziwym modelem (GPU, OpenPCDet, dane KITTI)
+```
+
 ## Dane
 
 Pobierz zbiór KITTI (tracking benchmark) ze strony [cvlibs.net/datasets/kitti](https://www.cvlibs.net/datasets/kitti/) i umieść w `data/raw/` zgodnie ze strukturą opisaną w `data/raw/README.md`.

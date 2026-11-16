@@ -173,17 +173,26 @@ def test_show_rejected(page, server, sequence_dir, console_errors):
     expect(page.locator("#list .item")).to_have_count(1)
 
 
-def test_playback_runs_to_the_end_without_logging(page, server, sequence_dir, console_errors):
+def test_playback_logs_start_and_stop_but_not_every_frame(page, server, sequence_dir, console_errors):
     sid = open_sequence(page, server, sequence_dir)
     press(page, " ")
     expect(page.locator("#play")).to_contain_text("Pause")
     expect_frame(page, NUM_FRAMES)
     expect(page.locator("#play")).to_contain_text("Play")         # stops by itself on the last frame
-    press(page, "Tab", "a")                                       # a change, so the session is saved
     path = server.results_dir / "sessions"
-    data = wait_until(lambda: _only_session_file(path))
-    assert [e for e in data["events"] if e["action"] == "frame_change"] == []
-    assert state(page, server, sid, NUM_FRAMES - 1)["annotations"][0]["status"] == "accepted"
+
+    def actions():
+        data = _only_session_file(path)
+        acts = [e["action"] for e in data["events"]]
+        assert "playback_stop" in acts
+        return acts
+
+    acts = wait_until(actions)
+    assert acts.count("playback_start") == 1 and acts.count("playback_stop") == 1
+    assert "frame_change" not in acts                              # the frames played are not logged
+    assert _only_session_file(path)["revision"] == 0               # logging never changes the revision
+    press(page, "Tab", "a")
+    wait_until(lambda: state(page, server, sid, NUM_FRAMES - 1)["annotations"][0]["status"] == "accepted")
 
 
 def _only_session_file(folder):
@@ -279,6 +288,40 @@ def test_undo_after_server_restart(page, server, sequence_dir, console_errors):
     press(page, "z")
     expect(page.locator("#list .item").first).to_contain_text("pending")
     assert statuses(page, server, new_sid)[0] == "pending"
+
+
+@pytest.mark.postgres
+def test_review_on_postgres_survives_a_restart(page, tmp_path, sequence_dir, console_errors, pg_engine, pg_url):
+    """The whole stack with LAL_SESSION_STORE=postgres: decisions, undo after a server restart.
+    The lock is in the database, so it outlives the restart: the session can be opened again only
+    once the old tab's lock has expired (here after 3 s instead of the default 120 s)."""
+    from tests.e2e.conftest import AppServer
+
+    ttl = 3.0
+    srv = AppServer(tmp_path / "results", {"LAL_SESSION_STORE": "postgres", "LAL_DATABASE_URL": pg_url,
+                                           "LAL_LOCK_TTL_SECONDS": str(ttl)})
+    srv.start()
+    try:
+        sid = open_sequence(page, srv, sequence_dir)
+        press(page, "Tab", "a")
+        wait_until(lambda: statuses(page, srv, sid)[0] == "accepted")
+        assert not (tmp_path / "results" / "sessions").exists()       # nothing written as files
+        srv.restart()
+        started = time.time()
+        page.goto(srv.url + "/")
+        page.fill("#path", str(sequence_dir))
+        page.click("#open")
+        if time.time() - started < ttl - 0.5:                          # opened again before the lock expired
+            expect(page.locator("#openMsg")).to_contain_text("already open in another tab")
+            expect(page.locator("#openMsg")).to_contain_text(sid)
+        time.sleep(max(0.0, ttl + 0.5 - (time.time() - started)))
+        new_sid = open_sequence(page, srv, sequence_dir)
+        expect(page.locator("#list .item").first).to_contain_text("accepted")
+        press(page, "z")
+        expect(page.locator("#list .item").first).to_contain_text("pending")
+        assert statuses(page, srv, new_sid)[0] == "pending"
+    finally:
+        srv.stop()
 
 
 # Not covered (needs a human look or pixel-level tests):

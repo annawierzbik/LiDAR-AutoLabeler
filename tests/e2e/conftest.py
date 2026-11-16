@@ -37,14 +37,15 @@ def _free_port() -> int:
 class AppServer:
     """The web app (tests/e2e/app_server.py) in its own process; `restart` keeps the results folder."""
 
-    def __init__(self, results_dir: Path) -> None:
+    def __init__(self, results_dir: Path, env: dict | None = None) -> None:
         self.results_dir = results_dir
+        self.extra_env = env or {}
         self.proc: subprocess.Popen | None = None
         self.url = ""
 
     def start(self) -> None:
         port = _free_port()
-        env = {**os.environ, "LAL_RESULTS_DIR": str(self.results_dir)}
+        env = {**os.environ, "LAL_RESULTS_DIR": str(self.results_dir), **self.extra_env}
         self.proc = subprocess.Popen([sys.executable, "-m", "tests.e2e.app_server", str(port)],
                                      cwd=PROJECT_ROOT, env=env)
         self.url = f"http://127.0.0.1:{port}"

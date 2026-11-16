@@ -87,7 +87,9 @@ def test_browser_accept_needs_an_explicit_box(c, tmp_path):
     from tests.test_web.test_service import FakeLoader
     from web.service import ReviewService
 
-    svc = ReviewService(c.session, FileSessionStore(tmp_path), "s", LoaderPointSource(FakeLoader()))
+    store = FileSessionStore(tmp_path)
+    store.create("s", c.session)
+    svc = ReviewService(store.load("s"), store, "s", LoaderPointSource(FakeLoader()))
     with pytest.raises(ValueError, match="index"):
         svc.act("accept", frame=0)
     assert svc.act("accept", frame=0, index=0)["stats"]["reviewed"] == 1

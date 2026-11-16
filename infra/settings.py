@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     point_cache_frames: int = 8               # point clouds kept in memory per open session
-    session_store: Literal["file"] = "file"
+    session_store: Literal["file", "postgres"] = "file"
+    database_url: str | None = None           # e.g. postgresql+psycopg://lal:<password>@localhost:55432/lal
+    lock_ttl_seconds: float = 120.0           # a session lock expires without a heartbeat for this long
     blob_store: Literal["local"] = "local"
     job_queue: Literal["thread"] = "thread"
 
@@ -40,3 +42,18 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def make_session_store(settings: Settings | None = None):
+    """The SessionStore chosen by LAL_SESSION_STORE: "file" (default) or "postgres" (needs LAL_DATABASE_URL)."""
+    settings = settings or get_settings()
+    if settings.session_store == "postgres":
+        if not settings.database_url:
+            raise ValueError("LAL_SESSION_STORE=postgres needs LAL_DATABASE_URL")
+        from infra.db import make_engine
+        from infra.pg_sessions import PgSessionStore
+
+        return PgSessionStore(make_engine(settings.database_url), lock_ttl=settings.lock_ttl_seconds)
+    from infra.sessions import FileSessionStore
+
+    return FileSessionStore(settings.session_dir, lock_ttl=settings.lock_ttl_seconds)

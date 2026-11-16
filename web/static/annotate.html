@@ -316,7 +316,10 @@ if (!SID) location.href = '/';
 const API = '/api/s/' + SID;
 async function api(path, body) {
   const r = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) } : undefined);
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) {
+    let m = await r.text(); try { m = JSON.parse(m).detail || m; } catch (e) {}
+    const err = new Error(m); err.status = r.status; throw err;
+  }
   return r;
 }
 // a server action on the shown frame; returns the new state (already shown) or null on error
@@ -325,8 +328,17 @@ async function act(name, extra = {}) {
     const s = await (await api(API + '/action', { name, frame: ui.frame, ...extra })).json();
     applyState(s);
     return s;
-  } catch (e) { toast('Error: ' + e.message); return null; }
+  } catch (e) {
+    toast('Error: ' + e.message);
+    if (e.status === 409 && /changed elsewhere/.test(e.message)) reloadFrame();   // revision conflict: show what is stored now
+    return null;
+  }
 }
+function reloadFrame() {
+  api(`${API}/state?frame=${ui.frame}`).then(r => r.json()).then(applyState).catch(() => {});
+}
+// events that change nothing (playback): appended to the session's event log, answer not needed
+function logEvent(name) { api(API + '/action', { name, frame: ui.frame }).catch(() => {}); }
 // show another frame; `log` records the frame change in the session's event log (not for playback).
 // Quick key presses must add up (two Right presses = two frames) although the first answer has
 // not arrived yet: steps start from the frame being loaded, and only the newest answer is shown.
@@ -616,14 +628,23 @@ $('cls').onchange = e => {             // class for new boxes; also relabels the
 };
 $('rej').onchange = e => toggleRejected(e.target.checked);
 
+// Playback logs a start, a stop and a heartbeat every 10 s, so the time spent watching counts as
+// active time (docs/adr/0013); the frames shown during playback are not logged one by one.
+let playTick = null;
 function setPlaying(on) {
+  if (on === playing) return;
   playing = on; $('play').firstChild.textContent = on ? 'Pause ' : 'Play ';
-  clearInterval(timer);
-  if (on) timer = setInterval(async () => {
+  clearInterval(timer); clearInterval(playTick);
+  logEvent(on ? 'playback_start' : 'playback_stop');
+  if (!on) return;
+  playTick = setInterval(() => logEvent('playback_tick'), 10000);
+  timer = setInterval(async () => {
     if (ui.frame + 1 >= state.num_frames) return setPlaying(false);
     await show(ui.frame + 1, false);
   }, 250);
 }
+// keep this tab's lock on the session (it expires after LAL_LOCK_TTL_SECONDS without a heartbeat)
+setInterval(() => api(API + '/heartbeat', {}).catch(e => toast('Error: ' + e.message)), 30000);
 $('play').onclick = e => { setPlaying(!playing); if (e.detail > 0) e.currentTarget.blur(); };
 
 // --------------------------------------------------------------------- export

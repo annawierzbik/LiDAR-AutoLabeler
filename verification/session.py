@@ -308,9 +308,9 @@ class AnnotationSession:
         return sum(b - a for a, b in itertools.pairwise(ts) if b - a <= max_gap)
 
     # --------------------------------------------------------------------- I/O
-    def save(self, path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def to_dict(self, include_events: bool = True) -> dict:
+        """The session document (file format v2). Without events for stores that keep the event
+        log separately (append-only, e.g. the session_events table)."""
         data = {
             "version": SESSION_VERSION,
             "sequence": self.sequence, "mode": self.mode,
@@ -320,13 +320,14 @@ class AnnotationSession:
             "frames": {str(f): [a.to_dict() for a in anns] for f, anns in self.frames.items() if anns},
             "undo": [_step_to_dict(step) for step in self._undo],
             "redo": [_step_to_dict(step) for step in self._redo],
-            "events": [asdict(e) for e in self.events],
         }
-        atomic_write_text(path, json.dumps(data))  # a crash while saving cannot corrupt the previous file
+        if include_events:
+            data["events"] = [asdict(e) for e in self.events]
+        return data
 
     @classmethod
-    def load(cls, path, clock: Callable[[], float] = time.time) -> AnnotationSession:
-        data = json.loads(Path(path).read_text())
+    def from_dict(cls, data: dict, clock: Callable[[], float] = time.time) -> AnnotationSession:
+        """Inverse of `to_dict` (v1 and v2 documents); no event is logged."""
         if data.get("version") not in READABLE_VERSIONS:
             raise ValueError(f"unsupported session version {data.get('version')}")
         # files written before the "participant" field was dropped still have it; it is ignored
@@ -334,10 +335,19 @@ class AnnotationSession:
         s._next_track_id = data["next_track_id"]
         for f, anns in data["frames"].items():
             s.frames[int(f)] = [Annotation.from_dict(a) for a in anns]
-        s.events = [Event(**e) for e in data["events"]]
+        s.events = [Event(**e) for e in data.get("events", [])]
         s.revision = int(data.get("revision", 0))
         s._undo = [_step_from_dict(d) for d in data.get("undo", [])][-UNDO_LIMIT:]
         s._redo = [_step_from_dict(d) for d in data.get("redo", [])][-UNDO_LIMIT:]
+        return s
+
+    def save(self, path) -> None:
+        atomic_write_text(Path(path), json.dumps(self.to_dict()))  # a crash while saving cannot corrupt the previous file
+
+    @classmethod
+    def load(cls, path, clock: Callable[[], float] = time.time) -> AnnotationSession:
+        """Read a session file and log "session_resume" (someone opens the session again)."""
+        s = cls.from_dict(json.loads(Path(path).read_text()), clock)
         s.log("session_resume")
         return s
 
