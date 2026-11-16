@@ -173,3 +173,17 @@ def test_frame_marks_follow_review_progress(svc):
     svc.act("accept_track", frame=0, track_id=0)
     st = svc.act("accept_track", frame=0, track_id=1)
     assert st["frame_marks"] == [2, 2, 2]
+
+
+def test_playback_adds_no_active_time(tmp_path):
+    """Browser playback reads state(frame) once per 250 ms. Like play_step before phase 1
+    (goto(..., log=False)) it writes no event, so 60 s of playback add 0 s of active time."""
+    now = [1000.0]
+    results = [[box(10 + i * 0.1, 0)] for i in range(241)]
+    s = AnnotationSession.from_tracking("0000", results, clock=lambda: now[0])
+    svc = ReviewService(s, FileSessionStore(tmp_path), "s", LoaderPointSource(FakeLoader()))
+    before = list(s.events)                       # the session start event
+    for f in range(1, 241):
+        now[0] += 0.25
+        svc.state(f)
+    assert s.events == before and s.active_seconds() == 0.0
