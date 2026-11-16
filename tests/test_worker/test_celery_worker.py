@@ -190,3 +190,29 @@ def test_heartbeat_continues_while_the_model_loads_and_during_a_slow_frame(env):
     assert loading and max(b[1] for b in loading) - min(b[1] for b in loading) > 2.5   # beats during the load
     stalled = [b for b in beats if b[2] == "detecting" and 0.4 < b[3] < 0.6]          # around frame 5
     assert stalled and max(b[1] for b in stalled) - min(b[1] for b in stalled) > 2.5   # beats during the slow frame
+
+
+def test_the_scheduler_deletes_expired_exports(env, tmp_path):
+    """A real `celery beat` sends lal.prune_exports; a cpu worker deletes the expired zip only."""
+    from infra.blob import LocalBlobStore
+    from infra.tasks import export_key
+
+    exports = LocalBlobStore(env.results / "exports")
+    old, new = export_key(time.time() - 1, "j1", "a.zip"), export_key(time.time() + 3600, "j2", "b.zip")
+    for k in (old, new):
+        exports.put(k, b"zip")
+    env.start_worker("w1")
+    beat_env = {**env.worker_env, "LAL_EXPORT_PRUNE_MINUTES": "0.02"}           # every 1.2 s
+    with (tmp_path / "beat.log").open("ab") as out:
+        beat = subprocess.Popen([sys.executable, "-m", "celery", "-A", "infra.celery_app", "beat", "-l", "info",
+                                 "-s", str(tmp_path / "beat-schedule")],
+                                cwd=PROJECT_ROOT, env=beat_env, stdout=out, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.time() + 60
+            while exports.exists(old) and time.time() < deadline:
+                time.sleep(0.2)
+        finally:
+            beat.terminate()
+            beat.wait(15)
+    assert not exports.exists(old), (tmp_path / "beat.log").read_text(errors="replace")[-2000:]
+    assert exports.list() == [new]

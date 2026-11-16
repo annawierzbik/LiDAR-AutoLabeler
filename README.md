@@ -111,6 +111,7 @@ python -m infra.migrate                                # migracje Alembic (schem
 python -m scripts.create_user admin --role admin       # pierwszy administrator (pyta o hasło)
 celery -A infra.celery_app worker -Q gpu -P solo -n gpu@%h    # otwieranie sesji z detekcją (jeden model)
 celery -A infra.celery_app worker -Q cpu -P solo -n cpu@%h    # eksport, sesje ręczne (można uruchomić kilka)
+celery -A infra.celery_app beat                              # harmonogram: usuwanie wygasłych eksportów (jeden)
 python -m scripts.web                                  # http://127.0.0.1:8000, logowanie
 docker compose -f docker-compose.db.yml down           # stop (dane zostają; -v usuwa wolumen)
 ```

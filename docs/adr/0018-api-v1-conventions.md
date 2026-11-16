@@ -25,7 +25,9 @@ Status: accepted (phase 4)
   (202), `GET /api/v1/jobs/<id>` shows progress and, when done, the summary;
   `GET /api/v1/jobs/<id>/download` returns the stored zip. The zip is a blob named
   `<expiry epoch>/<job id>/<archive>`; after `LAL_EXPORT_TTL_HOURS` (24) the download answers 410
-  `gone`, and every export run deletes expired zips. A format that cannot be produced fails the
+  `gone`. Expired zips are deleted by the periodic task `lal.prune_exports`
+  (`celery beat` sends it every `LAL_EXPORT_PRUNE_MINUTES`, 15, to the cpu queue) and by every
+  export run. A format that cannot be produced fails the
   job with the exporter's message. The direct in-request export and its preview are removed.
 - **Statelessness.** The API keeps no per-session or per-tab state between requests (ADR 0017);
   users, sequences, tabs, sessions and jobs are database rows, the queue is Redis, frames and

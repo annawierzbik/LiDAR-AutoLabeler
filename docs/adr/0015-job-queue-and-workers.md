@@ -50,7 +50,11 @@ Status: accepted (phase 3)
 ```
 celery -A infra.celery_app worker -Q gpu -P solo -n gpu@%h
 celery -A infra.celery_app worker -Q cpu -P solo -n cpu@%h
+celery -A infra.celery_app beat          # one scheduler: periodic tasks (lal.prune_exports)
 ```
+Periodic tasks are housekeeping, not jobs: no `jobs` row; a message older than its interval
+expires, so a scheduler running without workers does not pile them up. Exactly one beat process
+may run (two would send every task twice; harmless for pruning, but wasted).
 The `solo` pool runs one job at a time in the worker process itself (prefork does not work on
 Windows); start more cpu workers for more parallel exports. Linux containers follow in phase 5.
 

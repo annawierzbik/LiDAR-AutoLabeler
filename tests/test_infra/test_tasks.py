@@ -283,3 +283,23 @@ def test_expired_exports_are_pruned(tmp_path):
         blobs.put(k, b"zip")
     assert prune_exports(blobs, now=2000) == [old]
     assert blobs.list() == [new]
+
+
+def test_the_scheduler_prunes_exports_periodically(tmp_path, monkeypatch):
+    """celery beat sends lal.prune_exports every LAL_EXPORT_PRUNE_MINUTES to the cpu queue; the task
+    deletes the expired zips (a real beat + worker: tests/test_worker/test_celery_worker.py)."""
+    import infra.celery_app as ca
+    import infra.tasks
+    from infra.blob import LocalBlobStore
+    from infra.tasks import export_key
+
+    entry = ca.app.conf.beat_schedule["prune-exports"]
+    minutes = ca.settings.export_prune_minutes
+    assert entry["task"] == "lal.prune_exports" and entry["schedule"] == minutes * 60
+    assert entry["options"] == {"queue": "cpu", "expires": minutes * 60}
+    blobs = LocalBlobStore(tmp_path)
+    old, new = export_key(time.time() - 1, "j1", "a.zip"), export_key(time.time() + 3600, "j2", "b.zip")
+    for k in (old, new):
+        blobs.put(k, b"zip")
+    monkeypatch.setattr(infra.tasks, "export_blobs", lambda: blobs)
+    assert ca.prune_exports_task() == 1 and blobs.list() == [new]

@@ -3,6 +3,7 @@
 Workers (Windows: the "solo" pool, one job at a time per process):
     celery -A infra.celery_app worker -Q gpu -P solo -n gpu@%h        # detection + tracking, one model
     celery -A infra.celery_app worker -Q cpu -P solo -n cpu@%h        # export (start several for more)
+    celery -A infra.celery_app beat                                  # the scheduler (periodic tasks), one
 Environment: LAL_REDIS_URL (broker), LAL_DATABASE_URL (jobs table, sessions), LAL_RESULTS_DIR, and
 for gpu workers the detector configuration LAL_WORKER_DETECTOR_* (infra/worker_detector.py).
 
@@ -12,12 +13,18 @@ worker that dies mid-job leaves the message to be delivered again (Redis visibil
 started job's heartbeat lets anyone see that it stopped (PgJobStore.recover_stale), and a worker
 that starts requeues such jobs. Running a job twice is harmless (PgJobStore.start lets one run win;
 the tasks are idempotent on the detection cache).
+
+Periodic tasks (sent by exactly one `celery beat` process, run by a cpu worker): `lal.prune_exports`
+deletes expired export zips every LAL_EXPORT_PRUNE_MINUTES. They are housekeeping, not jobs: no row
+of `jobs`, and a message older than one interval is dropped (`expires`), so a scheduler that ran
+while no worker did does not pile them up.
 """
 from __future__ import annotations
 
 import logging
 import socket
 import threading
+import time
 
 from celery import Celery
 from celery.signals import worker_ready
@@ -37,6 +44,10 @@ app.conf.update(
     task_default_queue="cpu",
     task_ignore_result=True,                 # results live in the jobs table
     worker_hijack_root_logger=False,
+    beat_schedule={
+        "prune-exports": {"task": "lal.prune_exports", "schedule": settings.export_prune_minutes * 60,
+                          "options": {"queue": "cpu", "expires": settings.export_prune_minutes * 60}},
+    },
 )
 
 _store = None
@@ -132,6 +143,17 @@ def run_job(job_id: str, worker: str | None = None, store=None) -> str:
 @app.task(name="lal.run_job", bind=True)
 def run_job_task(self, job_id: str) -> str:
     return run_job(job_id, self.request.hostname)
+
+
+@app.task(name="lal.prune_exports")
+def prune_exports_task() -> int:
+    """Delete the export zips whose expiry has passed (LAL_EXPORT_TTL_HOURS after they were made)."""
+    from infra.tasks import export_blobs, prune_exports
+
+    gone = prune_exports(export_blobs(), time.time())
+    if gone:
+        log.info("deleted %d expired export(s)", len(gone))
+    return len(gone)
 
 
 @worker_ready.connect
