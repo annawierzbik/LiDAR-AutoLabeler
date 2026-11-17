@@ -281,3 +281,22 @@ def test_an_export_can_be_repeated_after_its_zip_is_gone(api, anna, monkeypatch,
     monkeypatch.undo()
     assert api.drain() == ["done"]
     assert anna.get(f"/api/v1/jobs/{again}/download").status_code == 200
+
+
+def test_two_tabs_of_one_owner_opening_the_same_sequence_share_one_job(api, anna):
+    """The opening's dedupe key names no tab: a second tab opening the same sequence (same mode and
+    range) while the first opening is queued gets the same job, so detection runs once."""
+    seq = upload(anna)
+    other = api.login("anna", client_id="tab-zzzzzzzz")
+    a = anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"}).json()
+    b = other.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"}).json()
+    assert a["sid"] != b["sid"] and a["job_id"] == b["job_id"] and len(api.sent) == 1
+    assert api.drain() == ["done"]
+    assert anna.get(f"/api/v1/tabs/{a['sid']}").json()["status"] == "ready"
+    second = other.get(f"/api/v1/tabs/{b['sid']}").json()                # the session is open in tab a
+    assert second["status"] == "error" and "another tab" in second["message"]
+    m = anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "manual"}).json()
+    assert m["job_id"] != a["job_id"]                                    # another mode: another job
+    anna.post(f"/api/v1/tabs/{a['sid']}/finish")
+    again = anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"}).json()
+    assert again["job_id"] != a["job_id"]                                # a finished opening is not reused

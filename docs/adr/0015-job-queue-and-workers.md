@@ -40,8 +40,10 @@ Status: accepted (phase 3)
   `PgJobStore.create` inserts with `ON CONFLICT DO NOTHING` on that index, so of two concurrent
   requests one inserts and the other reads the job it made (test:
   `tests/test_infra/test_pg_jobs.py::test_two_concurrent_requests_get_one_job`). Migration 0005
-  marks older duplicates that already exist as failed, keeping the newest. An opening's payload
-  contains the tab id, so this does not merge two tabs' openings (ADR 0017).
+  marks older duplicates that already exist as failed, keeping the newest. A done job serves a
+  new request only if the submitter's `reuse_done(result)` accepts it: an export while its zip is
+  still there, an opening never (review after phase 4). An opening's payload names no tab, so two
+  tabs opening the same sequence at the same time share one job (ADR 0017).
 - **Storage**: tasks read point clouds and calibration through BlobStores (`infra/sequences.py`) and
   read / write the detection cache through `BlobStore` (`verification.cache.choose_blob`,
   `output_key`); the path-based helpers remain as thin adapters for `evaluation/`.

@@ -116,13 +116,21 @@ def detect_track(payload: dict, ctx: TaskContext) -> dict:
 
 
 # ------------------------------------------------------------------ open_session
-def open_session_payload(spec: dict, owner_id: int, sequence_id: int, tab_id: str, mode: str = "assisted",
+def open_session_payload(spec: dict, owner_id: int, sequence_id: int, mode: str = "assisted",
                          start: int = 0, stop: int | None = None) -> dict:
-    """Payload of an open_session(_manual) job: session-builder arguments of the sequence `spec`."""
+    """Payload of an open_session(_manual) job: session-builder arguments of the sequence `spec`.
+    It names no browser tab, so tabs of one owner opening the same sequence, mode and range at the
+    same time get the same job (one detection run; review after phase 4)."""
     from pipeline.session_builder import make_args
 
     args = make_args(**spec, mode=mode, start=start, stop=stop)
-    return {"args": vars(args), "owner_id": owner_id, "sequence_id": sequence_id, "tab_id": tab_id}
+    return {"args": vars(args), "owner_id": owner_id, "sequence_id": sequence_id}
+
+
+def opening_reusable(result: dict | None) -> bool:
+    """A finished opening never serves a later request: opening again resumes the session (and logs
+    it) or rebuilds a deleted one. Only openings still queued or running are shared."""
+    return False
 
 
 def open_session_kind(mode: str) -> str:

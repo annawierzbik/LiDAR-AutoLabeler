@@ -21,7 +21,12 @@ from api.deps import ClientId, CurrentUser, Page, Services, Svc, owner_filter
 from api.errors import ApiError, not_found, responses
 from infra.auth import Principal
 from infra.sessions import RevisionConflict, SessionLocked, SessionNotFound
-from infra.tasks import export_reusable, open_session_kind, open_session_payload
+from infra.tasks import (
+    export_reusable,
+    open_session_kind,
+    open_session_payload,
+    opening_reusable,
+)
 from web.service import ReviewService, UnknownAction, point_bytes
 
 router = APIRouter(prefix="/api/v1", tags=["tabs"])
@@ -168,9 +173,9 @@ def open_tab(body: OpenTab, user: CurrentUser, client: ClientId,
                             "open the sequence in manual mode", code="assisted_unavailable")
     sid = svc.tabs.new_id()
     owner = seq["owner_id"]                     # an admin opening a user's sequence works on that user's session
-    payload = open_session_payload(seq["spec"], owner, seq["id"], sid, body.mode, body.start, body.stop)
+    payload = open_session_payload(seq["spec"], owner, seq["id"], body.mode, body.start, body.stop)
     title = f"{seq['name']} ({seq['num_frames']} frames)"
-    job_id = svc.queue.submit(open_session_kind(body.mode), payload, title=title)
+    job_id = svc.queue.submit(open_session_kind(body.mode), payload, title=title, reuse_done=opening_reusable)
     svc.tabs.create(sid, user.id, client, seq["id"], job_id, title)
     return {"sid": sid, "job_id": job_id}
 

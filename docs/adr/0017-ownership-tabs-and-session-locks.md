@@ -36,9 +36,12 @@ API replicas could not serve the same tab.
   of that tab get 409 `finished`.
 
 ## Consequences
-- Two tabs of the same user that open the same sequence at the same time may both run detection
-  (each opening is its own job); the detection cache and `SessionExists` handling keep the result
-  consistent.
+- Tabs of the same owner that open the same sequence (same mode and range) while an opening is
+  queued or running share that job: the payload names no tab (review after phase 4), and each tab
+  row points to the shared job. Cancelling from one tab cancels it for all of them. A finished
+  opening is not reused: opening again resumes the session in a new job. Different owners still
+  run their own openings; the detection cache keeps a second detection from running when the first
+  has finished.
 - Sessions stored before phase 4 have no owner and no `u<id>_` prefix: admins see them in
   `GET /api/v1/sessions`, but no tab opens them until they are assigned.
   `python -m scripts.import_sessions --owner <user>` imports files straight to a user;

@@ -204,7 +204,7 @@ def test_export_task_makes_a_zip(env, tmp_path):
 def open_payload(env, owner=3, mode="assisted"):
     from infra.tasks import open_session_payload
 
-    return open_session_payload({"folder": str(env.folder)}, owner, 1, "tab1", mode)
+    return open_session_payload({"folder": str(env.folder)}, owner, 1, mode)
 
 
 def test_open_session_builds_the_owners_session(env):
@@ -250,7 +250,7 @@ def test_open_session_of_a_bad_folder_fails_with_a_readable_message(env, tmp_pat
     empty.mkdir()
     q = ThreadTaskQueue(background=False)
     with mock.patch("infra.settings.make_session_store", return_value=FileSessionStore(env.results / "s")):
-        st = q.status(q.submit("open_session", open_session_payload({"folder": str(empty)}, 1, 1, "t")))
+        st = q.status(q.submit("open_session", open_session_payload({"folder": str(empty)}, 1, 1)))
     assert st.state == "failed" and st.message.startswith("No .bin point cloud files")
 
 
