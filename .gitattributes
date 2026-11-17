@@ -1,1 +1,7 @@
+# Files used inside Linux containers keep LF line endings on every checkout (also on Windows).
+*.sh text eol=lf
+Dockerfile* text eol=lf
+deploy/** text eol=lf
+docker-compose*.yml text eol=lf
+.env.example text eol=lf
 *.patch -text

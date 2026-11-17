@@ -1,0 +1,13 @@
+# Test-only additions to docker-compose.yml for scripts/smoke_stack.py (never used in a deployment):
+# a gpu-queue worker built from the app image that runs the fake detector (tests/fakes.py), so the
+# assisted path is tested without a GPU. The real GPU worker (--profile gpu) is not started.
+services:
+  worker-fake-gpu:
+    extends:
+      file: docker-compose.yml          # paths are relative to the project directory (the first -f file)
+      service: worker-cpu
+    command: ["celery", "-A", "infra.celery_app", "worker", "-Q", "gpu", "-P", "solo", "-n", "gpu@%h", "-l", "info"]
+    environment:
+      LAL_WORKER_DETECTOR_FACTORY: tests.fakes:FakeDetector
+    volumes:
+      - ./tests:/app/tests:ro

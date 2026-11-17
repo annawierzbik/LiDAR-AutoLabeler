@@ -12,6 +12,9 @@ LAL_DATABASE_URL, LAL_REDIS_URL, LAL_JWT_SECRET, LAL_SESSION_STORE=postgres and 
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -82,19 +85,38 @@ def create_app(svc: Services | None = None) -> FastAPI:
               routes_jobs.health):
         app.include_router(r)
 
+    csp = {page: page_csp(STATIC / page) for page in ("home.html", "login.html", "annotate.html")}
+
     @app.get("/", include_in_schema=False)
     def home():
-        return FileResponse(STATIC / "home.html")
+        return FileResponse(STATIC / "home.html", headers={"Content-Security-Policy": csp["home.html"]})
 
     @app.get("/login", include_in_schema=False)
     def login_page():
-        return FileResponse(STATIC / "login.html")
+        return FileResponse(STATIC / "login.html", headers={"Content-Security-Policy": csp["login.html"]})
 
     @app.get("/annotate", include_in_schema=False)
     def annotate():
-        return FileResponse(STATIC / "annotate.html")
+        return FileResponse(STATIC / "annotate.html", headers={"Content-Security-Policy": csp["annotate.html"]})
 
     return app
+
+
+_INLINE_SCRIPT = re.compile(r"<script\b[^>]*>(.*?)</script>", re.DOTALL | re.IGNORECASE)
+
+
+def page_csp(path) -> str:
+    """Content-Security-Policy of a page (docs/adr/0019): scripts only from this site or the page's
+    own inline scripts, named by their SHA-256 (computed from the file, so it always matches);
+    no eval, no plugins, no framing, requests only to this site. Inline style attributes are
+    allowed (the pages use them; styles cannot run code)."""
+    html = Path(path).read_text(encoding="utf-8")
+    hashes = " ".join(f"'sha256-{base64.b64encode(hashlib.sha256(s.encode('utf-8')).digest()).decode()}'"
+                      for s in _INLINE_SCRIPT.findall(html) if s.strip())
+    script = f"'self' {hashes}".strip()
+    return (f"default-src 'self'; script-src {script}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+            "frame-ancestors 'none'")
 
 
 def app_factory() -> FastAPI:

@@ -22,7 +22,7 @@ alembic==1.14.0
 psycopg[binary]==3.2.3
 
 # --- Job queue (LAL_JOB_QUEUE=celery) ---
-celery[redis]==5.4.0
+celery==5.4.0            # not celery[redis]: that extra pins an older redis-py than kombu 5.7 needs
 kombu==5.7.0
 redis==6.2.0            # kombu 5.7 needs redis-py >= 6.1
 

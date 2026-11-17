@@ -51,3 +51,9 @@ Thumbs.db
 *.mp4
 *.gif
 results/
+
+# --- Deployment (docker-compose.yml): secrets and TLS keys stay local ---
+.env
+backup/
+deploy/nginx/certs/*
+!deploy/nginx/certs/.gitkeep

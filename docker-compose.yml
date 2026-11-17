@@ -1,0 +1,181 @@
+# Deployment of LiDAR AutoLabeler (docs/adr/0019). Not for the tests: docker-compose.db.yml.
+#
+#   cp .env.example .env            # then fill in every secret (the file refuses to start without them)
+#   python scripts/make_dev_cert.py # only for https://localhost; real certificates go to LAL_TLS_DIR
+#   docker compose up -d --build                     # cpu-only: everything except the GPU worker
+#   docker compose --profile gpu up -d --build       # with the GPU worker (needs the NVIDIA runtime)
+#   docker compose run --rm api python -m scripts.create_user admin --role admin
+#   docker compose up -d --scale api=2 --scale worker-cpu=3
+#
+# Only nginx publishes ports. API, workers and scheduler share no filesystem: frames, detection
+# cache and exports are in MinIO (LAL_BLOB_STORE=s3), state in PostgreSQL, the queue in Redis. The
+# data root (registered folders) is mounted read-only into API and workers at /data.
+name: lidar-autolabeler
+
+x-app-env: &app-env
+  LAL_DATABASE_URL: postgresql+psycopg://lal:${LAL_DB_PASSWORD:?set LAL_DB_PASSWORD in .env}@postgres:5432/lal
+  LAL_REDIS_URL: redis://:${LAL_REDIS_PASSWORD:?set LAL_REDIS_PASSWORD in .env}@redis:6379/0
+  LAL_SESSION_STORE: postgres
+  LAL_JOB_QUEUE: celery
+  LAL_JWT_SECRET: ${LAL_JWT_SECRET:?set LAL_JWT_SECRET in .env (at least 32 characters)}
+  LAL_COOKIE_SECURE: "true"
+  LAL_BLOB_STORE: s3
+  LAL_S3_ENDPOINT_URL: http://minio:9000
+  LAL_S3_BUCKET: ${LAL_S3_BUCKET:-lal}
+  LAL_S3_ACCESS_KEY: ${LAL_MINIO_USER:?set LAL_MINIO_USER in .env}
+  LAL_S3_SECRET_KEY: ${LAL_MINIO_PASSWORD:?set LAL_MINIO_PASSWORD in .env}
+  LAL_DATA_ROOT: /data
+  LAL_UPLOAD_MAX_BYTES: ${LAL_UPLOAD_MAX_BYTES:-2147483648}
+  LAL_UPLOAD_MAX_UNPACKED_BYTES: ${LAL_UPLOAD_MAX_UNPACKED_BYTES:-8589934592}
+  LAL_EXPORT_TTL_HOURS: ${LAL_EXPORT_TTL_HOURS:-24}
+  LAL_EXPORT_PRUNE_MINUTES: ${LAL_EXPORT_PRUNE_MINUTES:-15}
+  LAL_ASSISTED_MODE: ${LAL_ASSISTED_MODE:-false}      # true only together with --profile gpu
+  LAL_ACCESS_TOKEN_MINUTES: ${LAL_ACCESS_TOKEN_MINUTES:-15}
+  LAL_REFRESH_TOKEN_DAYS: ${LAL_REFRESH_TOKEN_DAYS:-7}
+
+x-app: &app
+  image: lidar-autolabeler/app:${LAL_IMAGE_TAG:-local}
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile
+  environment: *app-env
+  volumes:
+    - ${LAL_DATA_DIR:-./deploy/empty-data}:/data:ro
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+
+x-worker-health: &worker-health
+  test: ["CMD", "python", "-m", "infra.healthcheck", "worker"]
+  interval: 30s
+  timeout: 15s
+  retries: 3
+  start_period: 20s
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: lal
+      POSTGRES_PASSWORD: ${LAL_DB_PASSWORD:?set LAL_DB_PASSWORD in .env}
+      POSTGRES_DB: lal
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lal -d lal"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7.4.1-alpine
+    # the queue only: job state is in PostgreSQL, so no persistence
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --save '' --appendonly no"]
+    environment:
+      REDIS_PASSWORD: ${LAL_REDIS_PASSWORD:?set LAL_REDIS_PASSWORD in .env}
+      REDISCLI_AUTH: ${LAL_REDIS_PASSWORD:?set LAL_REDIS_PASSWORD in .env}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  minio:
+    image: lidar-autolabeler/minio:RELEASE.2025-10-15T17-29-55Z
+    build: deploy/minio            # built from source: the project publishes no pullable image any more
+    environment:
+      MINIO_ROOT_USER: ${LAL_MINIO_USER:?set LAL_MINIO_USER in .env}
+      MINIO_ROOT_PASSWORD: ${LAL_MINIO_PASSWORD:?set LAL_MINIO_PASSWORD in .env}
+    volumes:
+      - miniodata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # one-shot: database migrations and the bucket, before anything else of the app starts
+  migrate:
+    <<: *app
+    command: ["sh", "-c", "python -m infra.migrate && python -m infra.storage --ensure-bucket"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    healthcheck:
+      test: ["CMD", "python", "-m", "infra.healthcheck", "http", "http://127.0.0.1:8000/readyz"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  worker-cpu:
+    <<: *app
+    command: ["celery", "-A", "infra.celery_app", "worker", "-Q", "cpu", "-P", "solo", "-n", "cpu@%h", "-l", "info"]
+    healthcheck: *worker-health
+
+  # periodic tasks (expired exports); exactly one
+  scheduler:
+    <<: *app
+    command: ["celery", "-A", "infra.celery_app", "beat", "-l", "info", "-s", "/tmp/celerybeat-schedule"]
+    healthcheck: *worker-health
+
+  worker-gpu:
+    <<: *app
+    profiles: ["gpu"]
+    image: lidar-autolabeler/worker-gpu:${LAL_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.gpu
+    volumes:
+      - ${LAL_DATA_DIR:-./deploy/empty-data}:/data:ro
+      # the weights are mounted, not baked in: <dir>/pointpillar_7728.pth (detection/paths.py)
+      - ${LAL_MODELS_DIR:-./checkpoints}:/app/checkpoints:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck: *worker-health
+
+  nginx:
+    image: nginx:1.27.3-alpine
+    ports:
+      - "${LAL_HTTPS_PORT:-443}:443"
+      - "${LAL_HTTP_PORT:-80}:80"
+    environment:
+      LAL_UPLOAD_MAX_BYTES: ${LAL_UPLOAD_MAX_BYTES:-2147483648}
+      LAL_LOGIN_RATE: ${LAL_LOGIN_RATE:-10r/m}
+      LAL_LOGIN_BURST: ${LAL_LOGIN_BURST:-5}
+      LAL_HSTS_MAX_AGE: ${LAL_HSTS_MAX_AGE:-31536000}
+      LAL_HTTPS_PORT: ${LAL_HTTPS_PORT:-443}
+      NGINX_ENVSUBST_FILTER: "^LAL_"
+    volumes:
+      - ./deploy/nginx/templates:/etc/nginx/templates:ro
+      - ${LAL_TLS_DIR:-./deploy/nginx/certs}:/etc/nginx/certs:ro
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:
+  miniodata:

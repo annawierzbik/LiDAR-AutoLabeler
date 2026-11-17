@@ -1,0 +1,113 @@
+# The gateway (docs/adr/0019). The nginx image fills in ${LAL_*} from its environment at start
+# (envsubst); every other $variable is nginx's own. Values come from docker-compose.yml / .env:
+#   LAL_UPLOAD_MAX_BYTES   the same limit the API enforces (one variable for both)
+#   LAL_LOGIN_RATE         e.g. 10r/m: failed or not, login attempts per client IP
+#   LAL_LOGIN_BURST        attempts allowed at once above that rate
+#   LAL_HSTS_MAX_AGE       seconds; 0 turns HSTS off (local work on https://localhost)
+#   LAL_HTTPS_PORT         the published HTTPS port (for the http -> https redirect)
+
+limit_req_zone $binary_remote_addr zone=login:10m rate=${LAL_LOGIN_RATE};
+limit_req_log_level warn;
+
+# HTTP: only a redirect to HTTPS
+server {
+    listen 80;
+    server_tokens off;
+    return 301 https://$host:${LAL_HTTPS_PORT}$request_uri;
+}
+
+# health of the gateway itself, for the container healthcheck only (not published)
+server {
+    listen 127.0.0.1:8081;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $api http://api:8000;
+    location = /healthz { proxy_pass $api; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_tokens off;
+
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:TLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # API replicas: Docker's DNS gives every replica of "api"; resolving per request (variable +
+    # resolver) also finds replicas started after nginx (docker compose up --scale api=N)
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $api http://api:8000;
+
+    # small bodies everywhere except the upload; short timeouts everywhere except where needed
+    client_max_body_size 1m;
+    client_body_timeout 30s;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Connection "";
+
+    # security headers on every answer (the pages' Content-Security-Policy comes from the API,
+    # which knows the hashes of their inline scripts)
+    add_header Strict-Transport-Security "max-age=${LAL_HSTS_MAX_AGE}" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "same-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+
+    # errors of the gateway in the API's error format (docs/adr/0018)
+    error_page 413 = @too_large;
+    error_page 429 = @rate_limited;
+    error_page 502 503 504 = @unavailable;
+
+    location = /api/v1/auth/login {
+        limit_req zone=login burst=${LAL_LOGIN_BURST} nodelay;
+        limit_req_status 429;
+        proxy_pass $api;
+    }
+
+    # uploads: the API's size limit, streamed to the API (no buffering here), long timeouts
+    location = /api/v1/sequences/upload {
+        client_max_body_size ${LAL_UPLOAD_MAX_BYTES};
+        client_body_timeout 300s;
+        proxy_request_buffering off;
+        proxy_send_timeout 900s;
+        proxy_read_timeout 900s;
+        proxy_pass $api;
+    }
+
+    # export downloads can be large zips
+    location ~ ^/api/v1/jobs/[^/]+/download$ {
+        proxy_read_timeout 300s;
+        proxy_pass $api;
+    }
+
+    location / {
+        proxy_pass $api;
+    }
+
+    location @too_large {
+        default_type application/json;
+        return 413 '{"error": {"code": "payload_too_large", "message": "the request body is larger than ${LAL_UPLOAD_MAX_BYTES} bytes (or than 1 MiB outside the upload)", "details": null}}';
+    }
+    location @rate_limited {
+        default_type application/json;
+        add_header Retry-After 60 always;
+        return 429 '{"error": {"code": "rate_limited", "message": "too many login attempts from this address; wait a minute", "details": null}}';
+    }
+    location @unavailable {
+        default_type application/json;
+        return 503 '{"error": {"code": "unavailable", "message": "the service is not reachable right now; try again shortly", "details": null}}';
+    }
+}

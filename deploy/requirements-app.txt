@@ -1,0 +1,17 @@
+# Python packages of the app image (API, cpu worker, scheduler, migration) on Linux, without
+# torch / OpenPCDet. Versions are those of requirements.txt (verified on Windows, Python 3.11).
+numpy==1.26.4
+scipy==1.17.1            # tracking (Hungarian assignment), used by detect_track
+fastapi==0.161.1
+uvicorn==0.54.0
+pydantic-settings==2.16.3
+PyJWT==2.15.1
+argon2-cffi==23.1.0
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg[binary]==3.2.3
+celery==5.4.0            # without the [redis] extra: it pins an older redis-py; kombu 5.7 needs redis-py >= 6.1
+kombu==5.7.0
+redis==6.2.0
+packaging==26.3          # imported by kombu's redis transport (installed by other packages on Windows)
+boto3==1.44.3

@@ -149,7 +149,106 @@ pytest -m postgres                      # testy z bazą, w tym API v1 (wymaga do
 pytest -m e2e                           # testy w przeglądarce: API, worker, baza, Redis (requirements-dev.txt, Chromium)
 pytest -m worker                        # prawdziwe procesy workerów Celery (Redis + PostgreSQL)
 pytest -m gpu                           # testy z prawdziwym modelem (GPU, OpenPCDet, dane KITTI)
+pytest -m s3                            # S3BlobStore i API na MinIO (docker-compose.db.yml)
+python scripts/smoke_stack.py           # cały stos z docker-compose.yml przez nginx (patrz niżej)
 ```
+
+## Wdrożenie w kontenerach (docker compose)
+
+Pełny stos z `docker-compose.yml`: nginx (TLS, jedyny opublikowany port), API (skalowalne),
+worker-cpu (skalowalny), worker-gpu (profil `gpu`), scheduler (zadania okresowe), PostgreSQL,
+Redis, MinIO i jednorazowa migracja. API i workery nie dzielą systemu plików: klatki, cache detekcji
+i eksporty są w MinIO, stan w PostgreSQL, kolejka w Redisie
+(`docs/adr/0019-containers-and-gateway.md`, `docs/adr/0020-object-storage-and-uploads-by-prefix.md`).
+
+### Start i stop
+
+```bash
+cp .env.example .env                 # uzupełnij wszystkie sekrety; bez nich compose nie wystartuje
+python scripts/make_dev_cert.py      # tylko dla https://localhost (certyfikat samopodpisany);
+                                     # prawdziwy certyfikat: tls.crt i tls.key w folderze LAL_TLS_DIR
+docker compose up -d --build                     # bez GPU (cpu-only): tylko tryb ręczny
+docker compose --profile gpu up -d --build       # z workerem GPU; w .env LAL_ASSISTED_MODE=true
+docker compose ps                                # stan i healthchecki
+docker compose down                              # stop; dane zostają w wolumenach
+docker compose down -v                           # stop i USUNIĘCIE danych (baza, MinIO)
+```
+
+Worker GPU wymaga sterownika NVIDIA i NVIDIA Container Toolkit; wagi (`pointpillar_7728.pth`)
+są montowane z folderu `LAL_MODELS_DIR` (domyślnie `./checkpoints`), nie ma ich w obrazie.
+Na `https://localhost` ustaw `LAL_HSTS_MAX_AGE=0`, inaczej przeglądarka zapamięta HTTPS dla
+wszystkich portów localhost.
+
+### Pierwszy administrator
+
+```bash
+docker compose exec api python -m scripts.create_user admin --role admin    # pyta o hasło dwa razy
+```
+
+Kolejnych użytkowników dodaje admin w API (`POST /api/v1/users`) albo tym samym poleceniem.
+
+### Skalowanie
+
+```bash
+docker compose up -d --scale api=2 --scale worker-cpu=3
+```
+
+nginx rozkłada żądania na wszystkie repliki API (także dodane później). Worker GPU i scheduler
+działają w jednej kopii. Każde późniejsze `docker compose up -d` bez `--scale` wraca do jednej
+repliki, więc podawaj te same `--scale` przy każdym `up`.
+
+### Kopia zapasowa i odtworzenie
+
+PostgreSQL (użytkownicy, sekwencje, sesje, zadania):
+
+```bash
+mkdir -p backup
+docker compose exec -T postgres pg_dump -U lal -Fc lal > backup/lal.dump
+# odtworzenie (aplikacja zatrzymana, baza działa):
+docker compose stop api worker-cpu scheduler worker-gpu
+docker compose exec -T postgres pg_restore -U lal -d lal --clean --if-exists < backup/lal.dump
+docker compose start api worker-cpu scheduler      # (i worker-gpu z --profile gpu)
+```
+
+MinIO (klatki wgranych sekwencji, cache detekcji, eksporty) jako archiwum wolumenu, przy
+zatrzymanym MinIO (`<projekt>` to nazwa projektu compose, domyślnie `lidar-autolabeler`). W Git
+Bash na Windows ustaw najpierw `export MSYS_NO_PATHCONV=1`, inaczej ścieżka `/backup/...` w
+kontenerze zostanie zamieniona na ścieżkę Windows:
+
+```bash
+docker compose stop minio
+docker run --rm -v <projekt>_miniodata:/data:ro -v "$PWD/backup:/backup" alpine:3.22.2     tar czf /backup/minio.tgz -C /data .
+docker compose start minio
+# odtworzenie:
+docker compose stop minio
+docker run --rm -v <projekt>_miniodata:/data -v "$PWD/backup:/backup" alpine:3.22.2     sh -c "find /data -mindepth 1 -delete && tar xzf /backup/minio.tgz -C /data"
+docker compose start minio
+```
+
+Obie kopie rób razem: sesje w bazie odwołują się do wgranych klatek i cache w MinIO.
+
+### Aktualizacja (z migracjami)
+
+```bash
+git pull
+docker compose build                       # nowe obrazy
+docker compose run --rm migrate            # migracje bazy (Alembic) i bucket, zanim ruszy nowy kod
+docker compose up -d                       # restart usług na nowych obrazach
+```
+
+Przed aktualizacją zrób kopię zapasową. Migracje idą tylko do przodu; powrót do starszej wersji
+to odtworzenie kopii.
+
+### Test dymny całego stosu
+
+```bash
+python scripts/smoke_stack.py              # stawia stos z losowymi sekretami, testuje przez nginx, sprząta
+```
+
+Skrypt tworzy admina, uruchamia scenariusz w przeglądarce na `https://localhost:8443` (dwóch
+użytkowników, wgranie, tryb assisted z fałszywym detektorem, przegląd, cofanie, eksport,
+zakończenie), skaluje worker-cpu do 3, sprawdza limit logowań i usuwa stos (`down -v`).
+`--gpu` używa prawdziwego workera GPU zamiast fałszywego detektora.
 
 ## Dane
 

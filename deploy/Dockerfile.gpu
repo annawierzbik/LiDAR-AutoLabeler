@@ -1,0 +1,55 @@
+# The worker-gpu image: CUDA 12.4, torch 2.6.0+cu124, spconv-cu120 2.3.6 and OpenPCDet built on
+# Linux (docs/adr/0019). The model weights are not in the image: they are mounted at /models.
+# The OpenPCDet ops are compiled for TORCH_CUDA_ARCH_LIST (default: Turing, Ampere, Ada).
+ARG OPENPCDET_COMMIT=233f849829b6ac19afb8af8837a0246890908755
+
+# ------------------------------------------------------------------ build stage
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS build
+ARG OPENPCDET_COMMIT
+ARG TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
+ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends software-properties-common gnupg ca-certificates git \
+ && add-apt-repository -y ppa:deadsnakes/ppa \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends python3.11 python3.11-dev python3.11-venv build-essential \
+ && rm -rf /var/lib/apt/lists/*
+RUN python3.11 -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+
+RUN pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+COPY deploy/requirements-app.txt deploy/requirements-gpu.txt /tmp/
+RUN pip install -r /tmp/requirements-app.txt -r /tmp/requirements-gpu.txt
+
+# OpenPCDet at the commit used on Windows, with the project's patch (portable C++ / CUDA fixes and
+# optional imports; openpcdet_windows_fixes.patch), built in place where detection/paths.py expects it.
+COPY openpcdet_windows_fixes.patch /tmp/
+RUN git clone https://github.com/open-mmlab/OpenPCDet.git /app/OpenPCDet \
+ && cd /app/OpenPCDet \
+ && git checkout "${OPENPCDET_COMMIT}" \
+ && git apply /tmp/openpcdet_windows_fixes.patch \
+ && rm -rf .git
+WORKDIR /app/OpenPCDet
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+RUN python setup.py develop
+
+# ---------------------------------------------------------------- runtime stage
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    LAL_RESULTS_DIR=/tmp/lal-results PATH=/opt/venv/bin:$PATH PYTHONPATH=/app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends software-properties-common gnupg ca-certificates \
+ && add-apt-repository -y ppa:deadsnakes/ppa \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends python3.11 \
+ && apt-get purge -y software-properties-common \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin lal
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build --chown=lal:lal /app/OpenPCDet /app/OpenPCDet
+WORKDIR /app
+COPY --chown=lal:lal . /app
+USER lal
+CMD ["celery", "-A", "infra.celery_app", "worker", "-Q", "gpu", "-P", "solo", "-n", "gpu@%h", "-l", "info"]

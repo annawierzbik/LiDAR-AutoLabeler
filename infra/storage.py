@@ -90,3 +90,26 @@ def delete_keys(store: BlobStore, keys: list[str]) -> None:
     else:
         for key in keys:
             store.delete(key)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """python -m infra.storage --ensure-bucket: create LAL_S3_BUCKET if it does not exist (the
+    one-shot migration service runs it); nothing to do for LAL_BLOB_STORE=local."""
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--ensure-bucket", action="store_true")
+    args = p.parse_args(argv)
+    s = get_settings()
+    if not args.ensure_bucket:
+        p.error("nothing to do")
+    if s.blob_store != "s3":
+        print("LAL_BLOB_STORE is not s3: no bucket to create")
+        return 0
+    created = s3_store("uploads", s).ensure_bucket()
+    print(f"bucket {s.s3_bucket} {'created' if created else 'exists'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

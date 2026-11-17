@@ -1,0 +1,20 @@
+# Only what the images need (allow-list). Data, weights, results, venv and secrets stay out.
+*
+!api/
+!common/
+!detection/
+!export/
+!infra/
+!ingestion/
+!migrations/
+!pipeline/
+!scripts/
+!tracking/
+!verification/
+!web/
+!alembic.ini
+!deploy/requirements-app.txt
+!deploy/requirements-gpu.txt
+!openpcdet_windows_fixes.patch
+**/__pycache__
+**/*.pyc
