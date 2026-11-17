@@ -23,7 +23,7 @@ def upload(c, data=None, name="drive"):
     return r.json()
 
 
-def test_health(api):
+def test_health(api, caplog):
     assert api.app and TestClientGet(api, "/healthz") == (200, {"status": "ok"})
     status, body = TestClientGet(api, "/readyz")
     assert status == 200 and body["status"] == "ready"
@@ -32,8 +32,12 @@ def test_health(api):
     def down():
         raise ConnectionError("no route to redis")
     api.env.ping = down
-    status, body = TestClientGet(api.restart(), "/readyz")
-    assert status == 503 and body["checks"]["redis"] == {"ok": False, "error": "ConnectionError: no route to redis"}
+    with caplog.at_level("WARNING", logger="api.routes_jobs"):
+        status, body = TestClientGet(api.restart(), "/readyz")
+    assert status == 503 and body["checks"]["redis"] == {"ok": False}
+    assert body["checks"]["database"] == {"ok": True}
+    assert "no route to redis" not in str(body)                       # no exception text for the client ...
+    assert "no route to redis" in caplog.text and "readiness check redis failed" in caplog.text   # ... only in the log
 
 
 def TestClientGet(api, path):

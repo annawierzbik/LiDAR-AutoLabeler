@@ -1,6 +1,7 @@
 """Jobs (state from the `jobs` table) and the download of a stored export; health checks."""
 from __future__ import annotations
 
+import logging
 import time
 
 from fastapi import APIRouter
@@ -10,6 +11,7 @@ from api.deps import CurrentUser, Page, Services, Svc, owner_filter
 from api.errors import ApiError, not_found, responses
 from infra.auth import Principal
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
 health = APIRouter(tags=["health"])
 
@@ -76,7 +78,8 @@ def healthz():
 @health.get("/readyz", responses={503: {"description": "a dependency is unreachable (see checks)"}})
 def readyz(svc: Svc):
     """Database, Redis and the blob areas (uploads, detection cache, exports: local folders
-    writable, or the S3 bucket reachable) can be used."""
+    writable, or the S3 bucket reachable) can be used. The answer names the failed checks only;
+    the exception text (hosts, paths, driver messages) goes to the log, not to the client."""
     from sqlalchemy import text
 
     from infra import storage
@@ -95,8 +98,9 @@ def readyz(svc: Svc):
         try:
             fn()
             checks[name] = {"ok": True}
-        except Exception as exc:  # noqa: BLE001  (any failure means not ready; say which)
-            checks[name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        except Exception:                 # any failure means not ready: say which check, not why
+            log.warning("readiness check %s failed", name, exc_info=True)   # the details only in the log
+            checks[name] = {"ok": False}
     ok = all(c["ok"] for c in checks.values())
     from fastapi.responses import JSONResponse
 

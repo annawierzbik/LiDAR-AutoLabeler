@@ -19,8 +19,10 @@ Status: accepted (phase 4)
 - **OpenAPI** at `/api/v1/openapi.json`, UI at `/api/v1/docs`; endpoints carry descriptions, the
   error responses and the `ErrorResponse` schema.
 - **Health.** `GET /healthz` answers 200 while the process runs (no dependency checked);
-  `GET /readyz` checks the database (`SELECT 1`), Redis (`PING`) and that the results and upload
-  blob folders are writable, and answers 200 `ready` or 503 `not_ready` with the result per check.
+  `GET /readyz` checks the database (`SELECT 1`), Redis (`PING`) and the three blob areas, and
+  answers 200 `ready` or 503 `not_ready` with `{"ok": true|false}` per check. The reason of a
+  failure (exception text: hosts, paths, driver messages) is logged by the API, never sent to the
+  client (review after phase 4).
 - **Exports** go through the cpu queue only: `POST /api/v1/tabs/<sid>/exports` returns a job id
   (202), `GET /api/v1/jobs/<id>` shows progress and, when done, the summary;
   `GET /api/v1/jobs/<id>/download` returns the stored zip. The zip is a blob named
