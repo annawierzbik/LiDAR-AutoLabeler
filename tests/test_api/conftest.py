@@ -4,6 +4,7 @@ to Redis, and the fake detector. `Api.drain()` runs the queued jobs."""
 from __future__ import annotations
 
 import io
+import os
 import zipfile
 from argparse import Namespace
 
@@ -18,6 +19,7 @@ from infra import worker_detector
 from infra.settings import get_settings
 from verification import cache
 
+REDIS_URL = os.environ.get("LAL_TEST_REDIS_URL", "redis://127.0.0.1:56379/7")   # docker-compose.db.yml
 SECRET = "test-secret-0123456789abcdef0123456789"
 PASSWORD = "correct horse battery"
 FRAMES = 5
@@ -75,14 +77,32 @@ class Api:
     def __init__(self, env, svc, app, sent) -> None:
         self.env, self.svc, self.app, self.sent = env, svc, app, sent
 
-    def drain(self) -> list[str]:
-        """Run every queued job (as a worker would); returns the final states."""
+    def drain(self, queue: str | None = None) -> list[str]:
+        """Run every queued job (as a worker would), also the follow-up jobs they submit; returns
+        the final states. With `queue`, only jobs of that queue run (the others stay queued, like
+        a queue without a free worker)."""
         from infra.celery_app import run_job
 
-        states = []
+        def send(job_id, q):
+            self.sent.append(job_id)
+
+        states, waiting = [], []
         while self.sent:
-            states.append(run_job(self.sent.pop(0), "test-worker", store=self.svc.jobs))
+            job_id = self.sent.pop(0)
+            if queue is not None and self._queue(job_id) != queue:
+                waiting.append(job_id)
+                continue
+            states.append(run_job(job_id, "test-worker", store=self.svc.jobs, send=send))
+        self.sent.extend(waiting)
         return states
+
+    def _queue(self, job_id: str) -> str:
+        from sqlalchemy import select
+
+        from infra.db import JobRow
+
+        with self.svc.engine.connect() as c:
+            return c.execute(select(JobRow.queue).where(JobRow.id == job_id)).scalar()
 
     def user(self, name: str, role: str = "annotator"):
         return self.svc.users.create(name, PASSWORD, role)
@@ -116,7 +136,7 @@ def api(tmp_path, monkeypatch, pg_url, pg_engine):
     results = tmp_path / "results"
     data_root = write_frames(tmp_path / "data" / "drive_a").parent
     for k, v in {"LAL_DATABASE_URL": pg_url, "LAL_JWT_SECRET": SECRET, "LAL_SESSION_STORE": "postgres",
-                 "LAL_JOB_QUEUE": "celery", "LAL_REDIS_URL": "redis://unused", "LAL_RESULTS_DIR": str(results),
+                 "LAL_JOB_QUEUE": "celery", "LAL_REDIS_URL": REDIS_URL, "LAL_RESULTS_DIR": str(results),
                  "LAL_DATA_ROOT": str(data_root), "LAL_COOKIE_SECURE": "false", "LAL_JOB_HEARTBEAT_SECONDS": "0.2",
                  "LAL_WORKER_DETECTOR_FACTORY": "tests.fakes:FakeDetector"}.items():
         monkeypatch.setenv(k, v)
@@ -126,6 +146,9 @@ def api(tmp_path, monkeypatch, pg_url, pg_engine):
     get_settings.cache_clear()
     worker_detector.reset()
     tests.fakes.LOADS = 0
+    import redis
+
+    redis.Redis.from_url(REDIS_URL).delete(worker_detector.FINGERPRINT_KEY)   # no GPU worker has started yet
     env = Namespace(tmp=tmp_path, results=results, data_root=data_root, ping=lambda: None)
     a = make_api(env)
     yield a

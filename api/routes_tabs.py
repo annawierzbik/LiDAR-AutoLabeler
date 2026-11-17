@@ -76,7 +76,15 @@ def _tab(svc: Services, sid: str, user: Principal) -> dict:
 
 
 def _job(svc: Services, tab: dict):
-    return svc.queue.status(tab["job_id"])
+    """The tab's opening job: the last of its chain (an opening on the cpu queue that needed
+    detection names the gpu job it submitted as `next_job`)."""
+    st = svc.queue.status(tab["job_id"])
+    for _ in range(4):
+        nxt = (st.result or {}).get("next_job") if st.state == "done" else None
+        if not nxt:
+            break
+        st = svc.queue.status(nxt)
+    return st
 
 
 def _ready(svc: Services, sid: str, user: Principal) -> Ready:
@@ -192,7 +200,7 @@ def tab_status(sid: str, user: CurrentUser, client: ClientId,
 def cancel_tab(sid: str, user: CurrentUser, svc: Svc):
     """Stop opening the session (detection stops at the next frame)."""
     tab = _tab(svc, sid, user)
-    return {"cancelled": svc.queue.cancel(tab["job_id"])}
+    return {"cancelled": svc.queue.cancel(_job(svc, tab).id)}
 
 
 @router.get("/tabs/{sid}/state", responses=responses(400, 404, 409))

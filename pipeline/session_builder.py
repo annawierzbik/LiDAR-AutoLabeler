@@ -158,12 +158,15 @@ def key_for_owner(key: str, sequence_label: str, owner: int) -> str:
     return owned_key(owner, f"training_{key}" if legacy else key)
 
 
-def new_session(args, seq, detect=None) -> AnnotationSession:
+def new_session(args, seq, detect=None, detector: dict | None = None) -> AnnotationSession:
     """A new session from cached detections, or after running detection + tracking (assisted), or
     empty (manual: no detector at all, so it works without a GPU). --start/--stop select a part.
 
     `detect(args)`: runs detection + tracking elsewhere (a job of the TaskQueue, infra/tasks.py)
-    and returns when its result is in the detection cache; without it the detector runs here."""
+    and returns when its result is in the detection cache; without it the detector runs here.
+    `detector`: the fingerprint ({"detector_config_hash", "checkpoint_hash"}) of the model the GPU
+    workers load, used instead of this process's files to decide whether the cache has a result
+    (a process without the weights, e.g. a cpu worker; infra.worker_detector.published_fingerprint)."""
     label, name, legacy = file_names(args)
     stop = min(args.stop if args.stop is not None else len(seq), len(seq))
     want = range(args.start, stop)
@@ -177,6 +180,8 @@ def new_session(args, seq, detect=None) -> AnnotationSession:
 
         split = args.split if has_split(args) else None
         meta = current_meta(args.threshold, sequence_mode(seq, args.fov), split)
+        if detector:
+            meta.update({k: detector[k] for k in ("detector_config_hash", "checkpoint_hash")})
         found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy)
         if found is None and detect is not None:
             detect(args)
@@ -200,7 +205,7 @@ def new_session(args, seq, detect=None) -> AnnotationSession:
     return session
 
 
-def prepare(args, store, detect=None) -> tuple[object, str]:
+def prepare(args, store, detect=None, detector: dict | None = None) -> tuple[object, str]:
     """Make sure the session of `args` exists in `store`; returns (sequence, key).
 
     An existing session is resumed ("session_resume" is logged), one stored under its legacy key is
@@ -219,7 +224,7 @@ def prepare(args, store, detect=None) -> tuple[object, str]:
         store.create(key, old)
         print(f"Resumed session {legacy} under its new name {key}")
         return seq, key
-    session = new_session(args, seq, detect)
+    session = new_session(args, seq, detect, detector)
     if store.exists(key):                                    # fresh: start over
         store.replace(key, session)
     else:

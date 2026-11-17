@@ -15,8 +15,9 @@ API replicas could not serve the same tab.
   resources cannot be confirmed (tested for every endpoint in `tests/test_api/test_ownership.py`).
   Session keys start with `u<owner id>_`, so every user has their own session of a sequence.
 - **Opening = a job.** `POST /api/v1/tabs {sequence_id, mode}` stores a row of `tabs` (id = the
-  `sid` of `/annotate?sid=`, user, client id, sequence, job) and submits `open_session` (gpu queue)
-  or `open_session_manual` (cpu queue). The worker resumes the session or builds it (from the
+  `sid` of `/annotate?sid=`, user, client id, sequence, job) and submits `open_session` on the cpu
+  queue, which hands over to `open_session_detect` on the gpu queue only when detection must run
+  (ADR 0015); the tab follows that chain. The worker resumes the session or builds it (from the
   detection cache, or by running detection + tracking inside the same job, with progress and
   cooperative cancellation) and returns `{session_key, num_frames, frame_offset}` as the job
   result. The API only reads job state from the database; `GET /api/v1/tabs/<sid>` shows

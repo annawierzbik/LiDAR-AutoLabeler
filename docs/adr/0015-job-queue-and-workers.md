@@ -12,10 +12,19 @@ Status: accepted (phase 3)
   - `celery`: `CeleryTaskQueue`; the broker message carries only the job id; payload, state,
     progress, attempts, result and error are rows of the `jobs` table (`infra/pg_jobs.py`, migration
     0003). Needs `LAL_REDIS_URL` and `LAL_DATABASE_URL`. Redis runs in `docker-compose.db.yml`.
-- **Opening a session** (phase 4, ADR 0017) is itself a job: `open_session` (gpu queue) or
-  `open_session_manual` (cpu queue) builds or resumes the session on the worker, running detection
-  + tracking inside the same job when the cache has no result, so the start page shows its
-  progress and a Cancel button (`POST /api/v1/tabs/<sid>/cancel`). Exports run only as tasks
+- **Opening a session** (phase 4, ADR 0017; split after the review of phase 4) starts on the
+  **cpu** queue (`open_session`): it resumes an existing session, builds a manual one, or builds an
+  assisted one from the detection cache. Only when real detection is needed does it submit
+  `open_session_detect` (**gpu** queue, detection + tracking in that job) and finish with
+  `{"next_job": id}`; the tab follows the chain (`api/routes_tabs.py: _job`), and Cancel cancels
+  the job the chain is at. So an opening that needs no detection never waits behind detection
+  jobs. Whether the cache has a result depends on the model, which only GPU workers have on disk:
+  a worker that has the weights publishes its fingerprint (`detector_config_hash`,
+  `checkpoint_hash`; Redis key `lal:detector-fingerprint`) when it starts and at every gpu
+  opening (`infra.worker_detector.publish_fingerprint`); the cpu step compares the cache with it.
+  Without a published fingerprint (no GPU worker has started, Redis unreachable) the cpu step
+  hands over to the gpu queue, where the worker decides itself. `open_session_manual` remains as
+  an alias of the cpu step for jobs queued before. Exports run only as tasks
   (`POST /api/v1/tabs/<sid>/exports`, `GET /api/v1/jobs/<id>`, `GET /api/v1/jobs/<id>/download`,
   ADR 0018). Before phase 4 an opening was a thread of the API process that waited for a
   `detect_track` job.

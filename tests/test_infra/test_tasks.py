@@ -201,6 +201,14 @@ def test_export_task_makes_a_zip(env, tmp_path):
         assert len([n for n in z.namelist() if n.startswith("labels/")]) == FRAMES
 
 
+def chain(q, job_id):
+    """The last job of an opening's chain (open_session on cpu -> open_session_detect on gpu)."""
+    st = q.status(job_id)
+    while st.state == "done" and (st.result or {}).get("next_job"):
+        st = q.status(st.result["next_job"])
+    return st
+
+
 def open_payload(env, owner=3, mode="assisted"):
     from infra.tasks import open_session_payload
 
@@ -215,13 +223,15 @@ def test_open_session_builds_the_owners_session(env):
     store = FileSessionStore(env.results / "sessions")
     q = ThreadTaskQueue(background=False)
     with mock.patch("infra.settings.make_session_store", return_value=store):
-        st = q.status(q.submit("open_session", open_payload(env)))
+        first = q.submit("open_session", open_payload(env))
+        st = chain(q, first)
+    assert q.status(first).result.get("next_job") and st.kind == "open_session_detect"   # detection on gpu
     assert st.state == "done", st.message
     assert st.result["session_key"].startswith("u3_") and st.result["num_frames"] == FRAMES
     assert store.load(st.result["session_key"]).stats()["total"] == FRAMES      # one fake car per frame
     assert len(cache_files(env.results)) == 1 and tests.fakes.LOADS == 1
     with mock.patch("infra.settings.make_session_store", return_value=store):   # another user: own session
-        other = q.status(q.submit("open_session", open_payload(env, owner=4)))
+        other = chain(q, q.submit("open_session", open_payload(env, owner=4)))
     assert other.result["session_key"].startswith("u4_") and tests.fakes.LOADS == 1   # detection cached
 
 
@@ -232,10 +242,11 @@ def test_open_session_manual_needs_no_detector(env):
     from infra.tasks import TASKS, open_session_kind
 
     store = FileSessionStore(env.results / "sessions")
-    assert open_session_kind("manual") == "open_session_manual" and TASKS["open_session_manual"][0] == "cpu"
+    assert open_session_kind("manual") == open_session_kind("assisted") == "open_session"
+    assert TASKS["open_session"][0] == "cpu" and TASKS["open_session_detect"][0] == "gpu"
     q = ThreadTaskQueue(background=False)
     with mock.patch("infra.settings.make_session_store", return_value=store):
-        st = q.status(q.submit("open_session_manual", open_payload(env, mode="manual")))
+        st = q.status(q.submit("open_session", open_payload(env, mode="manual")))
     assert st.state == "done" and store.load(st.result["session_key"]).stats()["total"] == 0
     assert tests.fakes.LOADS == 0 and cache_files(env.results) == []
 
@@ -264,11 +275,12 @@ def test_open_session_cancel_discards_the_partial_detection(env, monkeypatch):
     with mock.patch("infra.settings.make_session_store", return_value=FileSessionStore(env.results / "sessions")):
         jid = q.submit("open_session", open_payload(env))
         deadline = time.time() + 10
-        while q.status(jid).progress < 0.1:
+        while not (chain(q, jid).kind == "open_session_detect" and chain(q, jid).progress >= 0.1):
             assert time.time() < deadline
             time.sleep(0.01)
-        assert q.cancel(jid) is True
-        st = wait(q, jid)
+        detect_job = chain(q, jid).id
+        assert q.cancel(detect_job) is True
+        st = wait(q, detect_job)
     assert st.state == "cancelled" and cache_files(env.results) == []
 
 
@@ -313,3 +325,33 @@ def test_thread_queue_reuses_a_done_job_only_if_reuse_done_accepts_it():
     assert q.submit("t", {"x": 1}, reuse_done=lambda r: r["n"] == 1) == a
     b = q.submit("t", {"x": 1}, reuse_done=lambda r: False)
     assert b != a and q.status(b).state == "done"
+
+
+def test_an_opening_needs_the_gpu_queue_only_for_real_detection(env, monkeypatch):
+    """open_session runs on the cpu queue: an existing session is resumed and a cached result is
+    built there (with the GPU workers' published fingerprint); only a cache miss submits
+    open_session_detect."""
+    from unittest import mock
+
+    import infra.worker_detector as wd
+    from infra.sessions import FileSessionStore
+    from infra.tasks import opening_reusable
+
+    store = FileSessionStore(env.results / "sessions")
+    monkeypatch.setattr(wd, "_fingerprint", None)
+    q = ThreadTaskQueue(background=False)
+    with mock.patch("infra.settings.make_session_store", return_value=store):
+        first = q.status(q.submit("open_session", open_payload(env, owner=5), reuse_done=opening_reusable))
+        assert first.result.get("next_job")                                  # no session, no cache: gpu
+        built = q.status(first.result["next_job"])
+        resumed = q.status(q.submit("open_session", open_payload(env, owner=5), reuse_done=opening_reusable))
+        assert "next_job" not in resumed.result and resumed.result["session_key"] == built.result["session_key"]
+        if wd.worker_config()["checkpoint_hash"] is None:
+            pytest.skip("the cache-hit half needs the weights on disk (their hash is the fingerprint)")
+        monkeypatch.setattr(wd, "_fingerprint", {k: wd.worker_config()[k] for k in wd.FINGERPRINT})
+        other = q.status(q.submit("open_session", open_payload(env, owner=6), reuse_done=opening_reusable))   # cache hit for this model
+        assert "next_job" not in other.result and other.result["session_key"].startswith("u6_")
+        monkeypatch.setattr(wd, "_fingerprint", {"detector_config_hash": "x", "checkpoint_hash": "y"})
+        third = q.status(q.submit("open_session", open_payload(env, owner=7), reuse_done=opening_reusable))   # another model: detect
+        assert third.result.get("next_job")
+    assert tests.fakes.LOADS == 1                                         # the third did not run its detection here

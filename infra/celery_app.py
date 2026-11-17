@@ -78,8 +78,8 @@ class _WorkerContext:
 
     keeps_detector = True       # a GPU worker loads its one detector once and keeps it
 
-    def __init__(self, store, job_id: str) -> None:
-        self.store, self.job_id = store, job_id
+    def __init__(self, store, job_id: str, send=None) -> None:
+        self.store, self.job_id, self.send = store, job_id, send or dispatch
         self.interval = settings.job_heartbeat_seconds
         self._progress, self._message = 0.0, None
         self._stop_seen = False
@@ -103,14 +103,20 @@ class _WorkerContext:
     def should_stop(self) -> bool:
         return self._stop_seen
 
+    def submit(self, kind: str, payload: dict, title: str = "", reuse_done=None) -> str:
+        from infra.celery_queue import CeleryTaskQueue
+
+        return CeleryTaskQueue(self.store, send=self.send).submit(kind, payload, title, reuse_done)
+
     def close(self) -> None:
         self._done.set()
         self._thread.join(self.interval + 5)
 
 
-def run_job(job_id: str, worker: str | None = None, store=None) -> str:
+def run_job(job_id: str, worker: str | None = None, store=None, send=None) -> str:
     """Run one job in this process; returns its final state (or "skipped" if it was not queued).
-    `store`: the PgJobStore (default: the worker's, from LAL_DATABASE_URL)."""
+    `store`: the PgJobStore (default: the worker's, from LAL_DATABASE_URL); `send(job_id, queue)`:
+    how follow-up jobs a task submits are dispatched (default: the broker)."""
     from infra.tasks import TASKS, JobCancelled, TaskFailed
     from infra.worker_detector import DetectorMismatch
 
@@ -119,7 +125,7 @@ def run_job(job_id: str, worker: str | None = None, store=None) -> str:
     if payload is None:
         return "skipped"
     kind = store.status(job_id).kind
-    ctx = _WorkerContext(store, job_id)
+    ctx = _WorkerContext(store, job_id, send)
     try:
         result = TASKS[kind][1](payload, ctx)
         ctx.close()
@@ -160,6 +166,12 @@ def prune_exports_task() -> int:
 def _recover_on_start(sender=None, **_) -> None:
     """A starting worker requeues jobs whose worker died and sends queued jobs again (a lost broker
     message must not leave a job queued forever; a duplicate message is harmless)."""
+    try:
+        from infra.worker_detector import publish_fingerprint
+
+        publish_fingerprint()                  # only a worker that has the weights publishes
+    except Exception:
+        log.exception("publishing the detector fingerprint failed")
     try:
         store = job_store()
         store.recover_stale()

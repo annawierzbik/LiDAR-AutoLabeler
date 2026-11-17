@@ -52,8 +52,11 @@ class TaskQueue(Protocol):
 class _ThreadContext:
     keeps_detector = False      # thread mode: a detector per job, released afterwards
 
-    def __init__(self, job: JobStatus, stop: threading.Event) -> None:
-        self.job, self.stop = job, stop
+    def __init__(self, job: JobStatus, stop: threading.Event, queue: ThreadTaskQueue) -> None:
+        self.job, self.stop, self.queue = job, stop, queue
+
+    def submit(self, kind: str, payload: dict, title: str = "", reuse_done=None) -> str:
+        return self.queue.submit(kind, payload, title, reuse_done)
 
     def progress(self, fraction: float, message: str = "") -> None:
         self.job.progress = max(0.0, min(1.0, float(fraction)))
@@ -112,7 +115,7 @@ class ThreadTaskQueue:
                 return
             job.state, job.attempts = "running", job.attempts + 1
         try:
-            job.result = self.tasks[job.kind][1](payload, _ThreadContext(job, stop))
+            job.result = self.tasks[job.kind][1](payload, _ThreadContext(job, stop, self))
             job.state, job.progress = "done", 1.0
         except JobCancelled as exc:
             job.state, job.message = "cancelled", str(exc) or "cancelled"

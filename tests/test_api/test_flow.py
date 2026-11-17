@@ -102,8 +102,8 @@ def test_assisted_session_runs_detection_in_the_job(api, anna):
     seq = upload(anna)
     r = anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"})
     job = anna.get(f"/api/v1/jobs/{r.json()['job_id']}").json()
-    assert job["kind"] == "open_session"
-    assert api.drain() == ["done"]
+    assert job["kind"] == "open_session"                                  # on the cpu queue ...
+    assert api.drain() == ["done", "done"]                                # ... which hands detection to the gpu
     sid = r.json()["sid"]
     assert anna.get(f"/api/v1/tabs/{sid}").json()["status"] == "ready"
     s = anna.get(f"/api/v1/tabs/{sid}/state?frame=0").json()
@@ -291,7 +291,7 @@ def test_two_tabs_of_one_owner_opening_the_same_sequence_share_one_job(api, anna
     a = anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"}).json()
     b = other.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"}).json()
     assert a["sid"] != b["sid"] and a["job_id"] == b["job_id"] and len(api.sent) == 1
-    assert api.drain() == ["done"]
+    assert api.drain() == ["done", "done"]                                # one cpu opening, one detection
     assert anna.get(f"/api/v1/tabs/{a['sid']}").json()["status"] == "ready"
     second = other.get(f"/api/v1/tabs/{b['sid']}").json()                # the session is open in tab a
     assert second["status"] == "error" and "another tab" in second["message"]
@@ -300,3 +300,48 @@ def test_two_tabs_of_one_owner_opening_the_same_sequence_share_one_job(api, anna
     anna.post(f"/api/v1/tabs/{a['sid']}/finish")
     again = anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"}).json()
     assert again["job_id"] != a["job_id"]                                # a finished opening is not reused
+
+
+def test_resuming_does_not_wait_behind_detection_on_the_gpu_queue(api, anna):
+    """With the gpu queue blocked (a long detection that no worker takes), reopening an existing
+    session completes on the cpu queue; a new sequence that needs detection waits on the gpu queue."""
+    seq = upload(anna)
+    sid = api.open_tab(anna, seq["id"], "assisted")                        # session built (cpu -> gpu)
+    anna.post(f"/api/v1/tabs/{sid}/action", {"name": "accept", "frame": 0, "index": 0})
+    anna.post(f"/api/v1/tabs/{sid}/finish")
+    other = upload(anna, frames_zip(folder="other/"), "other")
+    blocked = anna.post("/api/v1/tabs", {"sequence_id": other["id"], "mode": "assisted"}).json()
+    assert api.drain(queue="cpu") == ["done"]                             # its cpu step hands off ...
+    assert anna.get(f"/api/v1/tabs/{blocked['sid']}").json()["progress"]["state"] == "queued"   # ... gpu blocked
+    again = anna.post("/api/v1/tabs", {"sequence_id": seq["id"], "mode": "assisted"}).json()
+    assert api.drain(queue="cpu") == ["done"]                             # resumed without the gpu queue
+    st = anna.get(f"/api/v1/tabs/{again['sid']}").json()
+    assert st["status"] == "ready", st
+    assert anna.get(f"/api/v1/tabs/{again['sid']}/state?frame=0").json()["annotations"][0]["status"] == "accepted"
+    assert anna.get(f"/api/v1/tabs/{blocked['sid']}").json()["status"] == "loading"   # still waiting for a gpu
+    assert api.drain() == ["done"]
+    assert anna.get(f"/api/v1/tabs/{blocked['sid']}").json()["status"] == "ready"
+
+
+def test_a_cached_result_is_built_on_the_cpu_queue_once_the_gpu_worker_published_its_model(api, anna):
+    """Another user opens the same sequence after detection ran: the cpu step finds the cache entry
+    of the published model and builds the session itself; no gpu job."""
+    from infra import worker_detector as wd
+
+    seq = upload(anna)
+    api.open_tab(anna, seq["id"], "assisted")                              # detection on the gpu step
+    if wd.published_fingerprint() is None:
+        pytest.skip("no weights on disk: the gpu step publishes no fingerprint")
+    api.user("boss", "admin")
+    admin = api.login("boss", "tab-cccccccc")
+    folder = api.env.data_root / "drive_a"                                 # the registered copy of a folder
+    reg = admin.post("/api/v1/sequences/register", {"path": "drive_a", "owner_id": anna.user["id"]}).json()
+    first = anna.post("/api/v1/tabs", {"sequence_id": reg["id"], "mode": "assisted"}).json()
+    assert api.drain() == ["done", "done"] and folder.is_dir()             # new folder: detection needed
+    bob = api.user("bob").id
+    bseq = admin.post("/api/v1/sequences/register", {"path": "drive_a", "owner_id": bob}).json()
+    b = api.login("bob", "tab-bbbbbbbb").post("/api/v1/tabs", {"sequence_id": bseq["id"], "mode": "assisted"}).json()
+    assert api.drain() == ["done"]                                          # cache hit: built on cpu
+    assert first["job_id"] != b["job_id"]
+    view = api.login("bob", "tab-bbbbbbbb").get(f"/api/v1/jobs/{b['job_id']}").json()
+    assert view["kind"] == "open_session" and "next_job" not in view["result"]

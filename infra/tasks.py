@@ -2,9 +2,11 @@
 
 Each task is `fn(payload: dict, ctx: TaskContext) -> dict` (JSON-able result):
     detect_track         gpu queue: detection + tracking of a sequence into the detection cache
-    open_session         gpu queue: build (or resume) a user's session of a sequence; detection +
-                         tracking first when the cache has no result (API v1, docs/adr/0017)
-    open_session_manual  cpu queue: the same for manual mode (no detector)
+    open_session         cpu queue: resume a user's session of a sequence, or build it (manual
+                         mode, or from the detection cache); when real detection is needed it
+                         submits open_session_detect and returns {"next_job": id} (docs/adr/0017)
+    open_session_detect  gpu queue: the same with detection + tracking in the job
+    open_session_manual  cpu queue: open_session (kept for jobs queued before the split)
     export               cpu queue: label files of a session as a zip in the export BlobStore,
                          deleted after LAL_EXPORT_TTL_HOURS
 
@@ -36,6 +38,9 @@ class TaskContext(Protocol):
     def should_stop(self) -> bool:
         """True once the job was asked to stop (cooperative cancellation)."""
 
+    def submit(self, kind: str, payload: dict, title: str = "", reuse_done=None) -> str:
+        """Queue a follow-up job on the same queue system (TaskQueue.submit); its id."""
+
 
 class JobCancelled(Exception):
     pass
@@ -43,6 +48,10 @@ class JobCancelled(Exception):
 
 class TaskFailed(Exception):
     """A failure whose message is meant for the user as it is (no exception class name)."""
+
+
+class NeedsDetection(Exception):
+    """open_session on the cpu queue: the session needs a detection run (no session, no cache)."""
 
 
 def results_blobs() -> BlobStore:
@@ -134,25 +143,54 @@ def opening_reusable(result: dict | None) -> bool:
 
 
 def open_session_kind(mode: str) -> str:
-    return "open_session_manual" if mode == "manual" else "open_session"
+    """Every opening starts on the cpu queue (review after phase 4): one that needs no detection
+    never waits behind detection jobs on the gpu queue."""
+    return "open_session"
 
 
 def open_session(payload: dict, ctx: TaskContext) -> dict:
-    """Make sure the owner's session of the sequence exists (resume, cached detections, or
-    detection + tracking right here, in this job) and return what a request needs to serve it."""
+    """cpu queue. Resume the owner's session, or build it in manual mode or from the detection
+    cache (judged with the GPU workers' published model fingerprint); if it needs a detection run,
+    submit open_session_detect (gpu queue) with the same payload and return {"next_job": id}:
+    the tab follows that job."""
+    from infra.worker_detector import published_fingerprint
+
+    def detect(a) -> None:
+        raise NeedsDetection()
+
+    try:
+        return _open(payload, ctx, detect, published_fingerprint())
+    except NeedsDetection:
+        nxt = ctx.submit("open_session_detect", payload, title="detection", reuse_done=opening_reusable)
+        ctx.progress(1.0, "waiting for detection on the gpu queue")
+        return {"next_job": nxt}
+
+
+def open_session_detect(payload: dict, ctx: TaskContext) -> dict:
+    """gpu queue: open_session with detection + tracking right here, in this job, when the cache
+    has no result for this worker's model."""
+    from infra.worker_detector import publish_fingerprint
+
+    publish_fingerprint()
+
+    def detect(a) -> None:
+        detect_track(detect_track_payload(a), ctx)
+
+    return _open(payload, ctx, detect, None)
+
+
+def _open(payload: dict, ctx: TaskContext, detect, detector: dict | None) -> dict:
+    """Make sure the owner's session of the sequence exists (resume, manual, cached detections or
+    `detect`) and return what a request needs to serve it."""
     from infra.settings import make_session_store
     from pipeline.session_builder import prepare
 
     args = Namespace(**payload["args"], owner=payload["owner_id"])
     store = make_session_store()
-
-    def detect(a) -> None:
-        detect_track(detect_track_payload(a), ctx)
-
     if ctx.should_stop():
         raise JobCancelled("cancelled")
     try:
-        _, key = prepare(args, store, detect)
+        _, key = prepare(args, store, detect, detector)
     except (FileNotFoundError, ValueError) as exc:
         raise TaskFailed(str(exc)) from None
     if hasattr(store, "set_owner"):
@@ -232,7 +270,8 @@ def export(payload: dict, ctx: TaskContext) -> dict:
 
 TASKS: dict[str, tuple[str, Callable[[dict, TaskContext], dict]]] = {
     "detect_track": (GPU, detect_track),
-    "open_session": (GPU, open_session),
+    "open_session": (CPU, open_session),
+    "open_session_detect": (GPU, open_session_detect),
     "open_session_manual": (CPU, open_session),
     "export": (CPU, export),
 }
