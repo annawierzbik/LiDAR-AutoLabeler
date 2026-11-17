@@ -283,3 +283,72 @@ def test_frames_are_listed_once_when_the_sequence_is_made(api, anna, monkeypatch
     eid = anna.post(f"/api/v1/tabs/{sid}/exports", {"format": "lidar", "include_unreviewed": True}).json()["job_id"]
     assert api.drain() == ["done"]
     assert anna.get(f"/api/v1/jobs/{eid}/download").status_code == 200
+
+
+
+@pytest.mark.parametrize("extraction", ["thread_pool", "on_the_event_loop"])
+def test_the_api_keeps_serving_while_an_upload_is_unpacked(api, anna, monkeypatch, extraction):
+    """One uvicorn server (one event loop): while an upload's extraction is held, /healthz and a
+    logged-in request still answer. The second case runs the extraction on the event loop, as a
+    plain call would, and shows that the test notices a blocked loop."""
+    import socket
+    import threading
+    import time
+
+    import httpx
+    import uvicorn
+
+    import api.routes_sequences as rs
+    from tests.test_api.conftest import PASSWORD
+
+    held, release = threading.Event(), threading.Event()
+    real = rs.extract_frames
+
+    def slow_extract(*args, **kwargs):
+        held.set()
+        release.wait(20)                                              # a large archive being unpacked
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(rs, "extract_frames", slow_extract)
+    if extraction == "on_the_event_loop":
+        async def inline(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+        monkeypatch.setattr(rs, "run_in_threadpool", inline)
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(api.app, host="127.0.0.1", port=port, log_level="warning"))
+    serving = threading.Thread(target=server.run, daemon=True)
+    serving.start()
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 20
+    while not server.started:
+        assert time.time() < deadline
+        time.sleep(0.05)
+    try:
+        c = httpx.Client(base_url=base, timeout=30)
+        c.post("/api/v1/auth/login", json={"username": "anna", "password": PASSWORD}).raise_for_status()
+        headers = {"X-CSRF-Token": c.cookies["lal_csrf"], "Content-Type": "application/zip"}
+        result = {}
+        uploading = threading.Thread(target=lambda: result.update(
+            r=c.post("/api/v1/sequences/upload?name=big", content=frames_zip(), headers=headers)))
+        uploading.start()
+        assert held.wait(10)                                          # the extraction is running now
+        try:
+            health = httpx.get(base + "/healthz", timeout=2)
+            seqs = httpx.get(base + "/api/v1/sequences", cookies=c.cookies, timeout=2)
+            answered = (health.status_code, seqs.status_code)
+        except httpx.TimeoutException:
+            answered = "timeout"
+        release.set()
+        uploading.join(30)
+        assert result["r"].status_code == 201, result["r"].text      # the upload itself completes
+        if extraction == "thread_pool":
+            assert answered == (200, 200)
+        else:
+            assert answered == "timeout"                              # a blocked loop answers nothing
+    finally:
+        release.set()
+        server.should_exit = True
+        serving.join(10)

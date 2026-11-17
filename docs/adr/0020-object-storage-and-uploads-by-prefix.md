@@ -27,6 +27,10 @@ share those folders. Containers on several hosts cannot.
   natural order of `ingestion.folder.frame_files`. The API serves points from the same keys (listed
   once per process; an upload never changes). `validate_upload` repeats the checks of
   `validate_folder` on blobs. The zip itself is only a temporary file of the API process.
+  Extraction, validation and the frame listing run in the thread pool (`run_in_threadpool`), so
+  the event loop keeps serving other requests during a large upload (test with a real uvicorn
+  server: `test_the_api_keeps_serving_while_an_upload_is_unpacked`); only the streaming of the body
+  into the temporary file (one write per received chunk) stays on the loop.
 - **Frame list stored with the sequence** (review after phase 4): when a sequence is made (upload
   or registration) its frame file names are listed once, in frame order, and stored in its spec
   (`"frames"`). The session builder takes them as the hidden argument `frames`, so the API (points,
