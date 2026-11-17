@@ -149,9 +149,12 @@ pytest -m postgres                      # testy z bazą, w tym API v1 (wymaga do
 pytest -m e2e                           # testy w przeglądarce: API, worker, baza, Redis (requirements-dev.txt, Chromium)
 pytest -m worker                        # prawdziwe procesy workerów Celery (Redis + PostgreSQL)
 pytest -m gpu                           # testy z prawdziwym modelem (GPU, OpenPCDet, dane KITTI)
-pytest -m s3                            # S3BlobStore i API na MinIO (docker-compose.db.yml)
+pytest -m s3                            # S3BlobStore na MinIO i SeaweedFS, API na MinIO (patrz niżej)
 python scripts/smoke_stack.py           # cały stos z docker-compose.yml przez nginx (patrz niżej)
 ```
+
+Testy `-m s3` potrzebują MinIO i SeaweedFS:
+`docker compose -f docker-compose.db.yml -f tests/s3compat/docker-compose.s3compat.yml up -d`.
 
 ## Wdrożenie w kontenerach (docker compose)
 

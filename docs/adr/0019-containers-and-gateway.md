@@ -22,7 +22,7 @@ Status: accepted (phase 5)
   - `deploy/minio/Dockerfile`: the MinIO server built from its official source at
     `RELEASE.2025-10-15T17-29-55Z` (`golang:1.24.9-alpine3.22`, runtime `alpine:3.22.2`). The
     project publishes no pullable image any more (`docker pull minio/minio:<tag>`: "repository does
-    not exist"; decided with the user).
+    not exist"; decided with the user). Pinned to tag and commit; the release fixes CVE-2025-62506 (ADR 0022).
   - `.dockerignore` is an allow-list: data, weights, results, venv, `.env` and keys never reach a
     build context.
 - **Services** (`docker-compose.yml`): `nginx` (the only published ports), `api` (scalable:

@@ -1,5 +1,7 @@
-"""S3BlobStore against the MinIO of docker-compose.db.yml (marker `s3`): the BlobStore contract of
-LocalBlobStore (tests/test_infra/test_storage.py), and areas kept apart by their prefixes."""
+"""S3BlobStore against two S3 implementations (marker `s3`): MinIO (docker-compose.db.yml) and
+SeaweedFS (tests/s3compat/docker-compose.s3compat.yml). The BlobStore contract of LocalBlobStore
+(tests/test_infra/test_storage.py) and areas kept apart by their prefixes hold on both
+(docs/adr/0022)."""
 import pytest
 
 from infra.blob import BlobStore
@@ -9,8 +11,8 @@ pytestmark = pytest.mark.s3
 
 
 @pytest.fixture
-def store(s3_bucket):
-    _, name, client = s3_bucket
+def store(any_s3_bucket):
+    _, name, client = any_s3_bucket
     return S3BlobStore(client, name, "cache/")
 
 
@@ -35,8 +37,8 @@ def test_keys_cannot_leave_the_area(store, key):
         store.put(key, b"x")
 
 
-def test_areas_are_separate_prefixes_of_one_bucket(s3_bucket):
-    _, name, client = s3_bucket
+def test_areas_are_separate_prefixes_of_one_bucket(any_s3_bucket):
+    _, name, client = any_s3_bucket
     uploads, cache = S3BlobStore(client, name, "uploads/"), S3BlobStore(client, name, "cache/")
     uploads.put("seq-1/0001.bin", b"x")
     cache.put("seq-1.json", b"{}")
@@ -56,12 +58,12 @@ def test_list_pages_and_delete_many(store):
     assert store.list() == []
 
 
-def test_ping_and_ensure_bucket(s3_bucket):
+def test_ping_and_ensure_bucket(any_s3_bucket):
     import uuid
 
     from botocore.exceptions import ClientError
 
-    _, name, client = s3_bucket
+    _, name, client = any_s3_bucket
     S3BlobStore(client, name).ping()
     other = S3BlobStore(client, f"lal-test-{uuid.uuid4().hex[:10]}")
     with pytest.raises(ClientError):

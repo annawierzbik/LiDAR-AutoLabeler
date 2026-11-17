@@ -3,7 +3,8 @@
 #   docker compose -f docker-compose.db.yml up -d
 #   docker compose -f docker-compose.db.yml down          # keeps the data volume (add -v to delete it)
 # The passwords are for these local containers only; set LAL_DB_PASSWORD / LAL_MINIO_PASSWORD to
-# choose others. MinIO is built from source (deploy/minio/Dockerfile, docs/adr/0019).
+# choose others. MinIO is built from source (deploy/minio/Dockerfile, docs/adr/0019, 0022). A second S3 server for
+# the compatibility tests: tests/s3compat/docker-compose.s3compat.yml.
 # Both ports are bound to 127.0.0.1 only. Redis is the Celery broker (no persistence needed:
 # job state lives in the jobs table).
 name: lidar-autolabeler-db

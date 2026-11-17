@@ -1,0 +1,22 @@
+# Test-only override of docker-compose.db.yml: a second S3 implementation (SeaweedFS) for the
+# S3BlobStore compatibility tests (pytest -m s3, tests/test_s3; docs/adr/0022). Never deployed.
+#   docker compose -f docker-compose.db.yml -f tests/s3compat/docker-compose.s3compat.yml up -d
+# The credentials are for this local test container only (tests/s3compat/seaweedfs-s3.json).
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json",
+              "-master.volumeSizeLimitMB=64", "-volume.max=8"]
+    ports:
+      - "127.0.0.1:58333:8333"        # S3 API
+    volumes:
+      - ./tests/s3compat/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+      - seaweeddata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/status || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+volumes:
+  seaweeddata:

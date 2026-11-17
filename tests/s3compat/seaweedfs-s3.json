@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "lal-test",
+      "credentials": [{"accessKey": "lal-local", "secretKey": "lal-local-seaweedfs"}],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

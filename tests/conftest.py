@@ -72,24 +72,56 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
-S3_TEST = {"endpoint": os.environ.get("LAL_TEST_S3_ENDPOINT", "http://127.0.0.1:59000"),
-           "access": os.environ.get("LAL_TEST_S3_ACCESS_KEY", "lal-local"),
-           "secret": os.environ.get("LAL_TEST_S3_SECRET_KEY", "lal-local-minio")}
+S3_SERVERS = {
+    # docker-compose.db.yml
+    "minio": {"endpoint": os.environ.get("LAL_TEST_S3_ENDPOINT", "http://127.0.0.1:59000"),
+              "access": os.environ.get("LAL_TEST_S3_ACCESS_KEY", "lal-local"),
+              "secret": os.environ.get("LAL_TEST_S3_SECRET_KEY", "lal-local-minio")},
+    # tests/s3compat/docker-compose.s3compat.yml (a second S3 implementation, docs/adr/0022)
+    "seaweedfs": {"endpoint": os.environ.get("LAL_TEST_SEAWEEDFS_ENDPOINT", "http://127.0.0.1:58333"),
+                  "access": "lal-local", "secret": "lal-local-seaweedfs"},
+}
+S3_TEST = S3_SERVERS["minio"]
+
+
+def _bucket(server: str):
+    from botocore.exceptions import EndpointConnectionError
+
+    from infra.s3 import make_client
+
+    cfg = S3_SERVERS[server]
+    client = make_client(cfg["endpoint"], cfg["access"], cfg["secret"], "us-east-1")
+    name = f"lal-test-{uuid.uuid4().hex[:10]}"
+    try:
+        client.create_bucket(Bucket=name)
+    except EndpointConnectionError:
+        pytest.fail(f"no S3 server {server} at {cfg['endpoint']}: start docker-compose.db.yml"
+                    + (" with tests/s3compat/docker-compose.s3compat.yml" if server != "minio" else ""))
+    env = {"LAL_BLOB_STORE": "s3", "LAL_S3_ENDPOINT_URL": cfg["endpoint"], "LAL_S3_BUCKET": name,
+           "LAL_S3_ACCESS_KEY": cfg["access"], "LAL_S3_SECRET_KEY": cfg["secret"]}
+    return env, name, client
+
+
+def _drop(name, client):
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=name):
+        for obj in page.get("Contents", []):
+            client.delete_object(Bucket=name, Key=obj["Key"])
+    client.delete_bucket(Bucket=name)
 
 
 @pytest.fixture
 def s3_bucket():
     """A fresh bucket on the MinIO of docker-compose.db.yml (marker `s3`), emptied and removed after
-    the test; yields (settings overrides for LAL_*, bucket name)."""
-    from infra.s3 import make_client
-
-    client = make_client(S3_TEST["endpoint"], S3_TEST["access"], S3_TEST["secret"], "us-east-1")
-    name = f"lal-test-{uuid.uuid4().hex[:10]}"
-    client.create_bucket(Bucket=name)
-    env = {"LAL_BLOB_STORE": "s3", "LAL_S3_ENDPOINT_URL": S3_TEST["endpoint"], "LAL_S3_BUCKET": name,
-           "LAL_S3_ACCESS_KEY": S3_TEST["access"], "LAL_S3_SECRET_KEY": S3_TEST["secret"]}
+    the test; yields (settings overrides for LAL_*, bucket name, boto3 client)."""
+    env, name, client = _bucket("minio")
     yield env, name, client
-    for page in client.get_paginator("list_objects_v2").paginate(Bucket=name):
-        for obj in page.get("Contents", []):
-            client.delete_object(Bucket=name, Key=obj["Key"])
-    client.delete_bucket(Bucket=name)
+    _drop(name, client)
+
+
+@pytest.fixture(params=sorted(S3_SERVERS))
+def any_s3_bucket(request):
+    """s3_bucket on every S3 implementation of the tests (MinIO and SeaweedFS): the S3BlobStore
+    contract must hold on both (it depends on the S3 protocol only)."""
+    env, name, client = _bucket(request.param)
+    yield env, name, client
+    _drop(name, client)
