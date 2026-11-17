@@ -134,11 +134,13 @@ def _inside_dontcare(bbox: np.ndarray, dontcare: list[np.ndarray], min_fraction:
 
 class _PairCache:
     """iou_matrix replacement that memoizes pairwise IoU by box identity. Boxes are reused across
-    variants, so each pair is computed once; values come from the repo's iou_3d / bev_iou."""
+    variants, so each pair is computed once; values come from the repo's iou_3d / bev_iou.
+    Each entry also holds the two boxes: an id() is unique only while its object is alive, and
+    CPython gives a freed box's id to a new one, which would otherwise get the old pair's IoU."""
 
     def __init__(self) -> None:
         self.fns = {"3d": iou_3d, "bev": bev_iou}
-        self.cache: dict[tuple[str, int, int], float] = {}
+        self.cache: dict[tuple[str, int, int], tuple[float, object, object]] = {}
         self.kind = "3d"
 
     def __call__(self, boxes_a, boxes_b) -> np.ndarray:
@@ -146,15 +148,15 @@ class _PairCache:
         for i, a in enumerate(boxes_a):
             for j, b in enumerate(boxes_b):
                 key = (self.kind, id(a), id(b))
-                v = self.cache.get(key)
-                if v is None:
+                entry = self.cache.get(key)
+                if entry is None:
                     # same cheap reject as common.geometry.iou_matrix
                     if np.linalg.norm(a.center[:2] - b.center[:2]) > (np.hypot(a.dx, a.dy) + np.hypot(b.dx, b.dy)) / 2:
                         v = 0.0
                     else:
                         v = fn(a, b)
-                    self.cache[key] = v
-                m[i, j] = v
+                    entry = self.cache[key] = (v, a, b)     # the boxes stay alive: their ids stay theirs
+                m[i, j] = entry[0]
         return m
 
 

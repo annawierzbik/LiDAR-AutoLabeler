@@ -117,3 +117,15 @@ def test_kitti_sampled_ap_on_perfect_records():
     evs = {}
     re_.evaluate(frames, re_.REPO_DEFAULT, evaluators=evs)
     assert re_.kitti_sampled_ap(evs["Car"], "Car", get_thresholds) == pytest.approx(1.0)
+
+
+def test_the_iou_cache_never_answers_for_freed_boxes():
+    """The IoU cache is keyed by id(box); CPython reuses the id of a freed box for a new one. A far
+    pair (IoU 0) evaluated and freed must not make a perfect pair made right after it score AP 0
+    (the cause of a flaky test_perfect_detection_gives_ap_100)."""
+    for _ in range(200):
+        far = [frame([gt("Car", 10)], [car(40)])]
+        re_.evaluate(far, re_.REPO_DEFAULT)
+        del far
+        good = [frame([gt("Car", 10)], [car(10)])]
+        assert re_.evaluate(good, re_.REPO_DEFAULT)["Car"]["AP40"] == pytest.approx(1.0)
