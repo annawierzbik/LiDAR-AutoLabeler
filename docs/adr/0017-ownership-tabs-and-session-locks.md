@@ -39,7 +39,7 @@ API replicas could not serve the same tab.
 ## Consequences
 - Tabs of the same owner that open the same sequence (same mode and range) while an opening is
   queued or running share that job: the payload names no tab (review after phase 4), and each tab
-  row points to the shared job. Cancelling from one tab cancels it for all of them. A finished
+  row points to the shared job. A finished
   opening is not reused: opening again resumes the session in a new job. Different owners still
   run their own openings; the detection cache keeps a second detection from running when the first
   has finished.
@@ -55,3 +55,9 @@ API replicas could not serve the same tab.
   session opens again when the folder is registered at the same path (the key contains a hash of
   the path); a session of a folder that is now uploaded instead does not match and stays as it is.
 - Tab rows are never deleted yet; they are small (one per opening).
+- **Note: Cancel in one tab cancels the opening for every tab sharing it.** Two tabs of one user
+  that open the same sequence, mode and range share one opening job (and its gpu follow-up), so
+  `POST /api/v1/tabs/<sid>/cancel` from either tab stops it, and the other tab then shows the
+  opening as cancelled; it has to be opened again. A per-tab cancel would need a count of the tabs
+  waiting on a job (not done: two tabs opening the same session at once is rare, and only one of
+  them can hold the lock afterwards anyway).
