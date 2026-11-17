@@ -11,6 +11,7 @@ import os
 import re
 import time
 import zipfile
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -104,11 +105,17 @@ def test_two_users_upload_review_export_and_finish(page, browser, url, console_e
         r = admin.post("/api/v1/users", json={"username": name, "password": PASSWORD, "role": "annotator"})
         assert r.status_code == 201, r.text
 
-    rng = np.random.default_rng(5)
     archive = tmp_path / "street.zip"
+    real = os.environ.get("LAL_SMOKE_FRAMES_DIR")                     # --gpu: real KITTI frames for the model
     with zipfile.ZipFile(archive, "w") as z:
-        for i in range(FRAMES):
-            z.writestr(f"street/scan_{i}.bin", rng.uniform(-30, 30, (800, 4)).astype("<f4").tobytes())
+        if real:
+            for f in sorted(Path(real).glob("*.bin"))[:FRAMES]:
+                z.write(f, f"street/{f.name}")
+        else:
+            rng = np.random.default_rng(5)
+            for i in range(FRAMES):
+                z.writestr(f"street/scan_{i}.bin", rng.uniform(-30, 30, (800, 4)).astype("<f4").tobytes())
+        first = min(z.namelist()).split("/")[-1][:-4]
     ui_login(page, url, "anna")
     page.set_input_files("#upFile", str(archive))
     page.click("#upload")
@@ -144,7 +151,7 @@ def test_two_users_upload_review_export_and_finish(page, browser, url, console_e
     with page.expect_download() as dl:
         page.click("#expGo")
     names = zipfile.ZipFile(dl.value.path()).namelist()
-    assert any(n.endswith("labels/scan_0.txt") for n in names), names     # the names of the archive
+    assert any(n.endswith(f"labels/{first}.txt") for n in names), names   # the names of the archive
 
     seq_id = page.request.get(f"{url}/api/v1/sequences").json()["items"][0]["id"]
     page.once("dialog", lambda d: d.accept())

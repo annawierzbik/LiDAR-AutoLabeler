@@ -12,3 +12,12 @@
   reports no per-process memory, so the figure is the whole GPU minus the baseline, and other
   applications may have changed their use meanwhile; a spike shorter than 250 ms can be missed;
   one run, one sequence, 20 frames.
+- `gpu_smoke_stack_memory.csv`: total GPU memory in use (MiB) during
+  `python scripts/smoke_stack.py --gpu` on 2026-11-17 (the containerised stack with the real
+  worker-gpu image, 6 frames of KITTI tracking 0000, the whole browser scenario through nginx),
+  sampled the same way (`nvidia-smi ... -lms 250`). Script start 21:43:25, stack healthy 21:44:02,
+  tests 21:44:03-21:44:42, teardown done 21:44:46; the whole run took 81 s (images already built).
+  Before: 2299 MiB; peak 2870 MiB at 21:44:18 (during the scenario), about 571 MiB above it; after
+  the teardown: 2149-2150 MiB (other applications changed their use meanwhile, the last sample
+  is 2336 MiB). Limits as above: whole GPU, Windows/WDDM, 250 ms sampling, one run. A unit-test
+  loop ran on the CPU at the same time.

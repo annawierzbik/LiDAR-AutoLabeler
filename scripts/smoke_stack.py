@@ -3,7 +3,8 @@
     python scripts/smoke_stack.py                 # fake detector (tests/smoke/docker-compose.smoke.yml)
     python scripts/smoke_stack.py --keep          # leave the stack running afterwards
     python scripts/smoke_stack.py --gpu           # the real GPU worker (--profile gpu) instead of the
-                                                  # fake one: only when no experiment uses the GPU
+                                                  # fake one, on 6 frames of KITTI tracking 0000
+                                                  # (data/raw): only when no experiment uses the GPU
 
 Steps: random secrets in a temporary .env (nothing is written into the repository), a self-signed
 certificate for localhost, `docker compose up -d --build` of docker-compose.yml (+ the test-only
@@ -29,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 UPLOAD_MAX_BYTES = 1_000_000           # small, so the gateway's 413 is cheap to test
+UPLOAD_MAX_BYTES_GPU = 64_000_000      # --gpu uploads 6 real KITTI frames (about 11 MB)
 
 
 def log(msg: str) -> None:
@@ -47,7 +49,7 @@ def write_env(folder: Path, https_port: int, http_port: int, gpu: bool) -> Path:
         "LAL_TLS_DIR": str(folder / "certs"),
         "LAL_HSTS_MAX_AGE": "0",
         "LAL_ASSISTED_MODE": "true",
-        "LAL_UPLOAD_MAX_BYTES": str(UPLOAD_MAX_BYTES),
+        "LAL_UPLOAD_MAX_BYTES": str(UPLOAD_MAX_BYTES_GPU if gpu else UPLOAD_MAX_BYTES),
         "LAL_IMAGE_TAG": "smoke",
     }
     if gpu:
@@ -110,11 +112,14 @@ def main(argv: list[str] | None = None) -> int:
                     "LAL_SMOKE_URL": f"https://localhost:{args.https_port}",
                     "LAL_SMOKE_HTTP_URL": f"http://localhost:{args.http_port}",
                     "LAL_SMOKE_ADMIN_PASSWORD": admin_password,
-                    "LAL_SMOKE_UPLOAD_MAX_BYTES": str(UPLOAD_MAX_BYTES),
+                    "LAL_SMOKE_UPLOAD_MAX_BYTES": str(UPLOAD_MAX_BYTES_GPU if args.gpu else UPLOAD_MAX_BYTES),
                     "LAL_SMOKE_COMPOSE": json.dumps(compose)}
+        if args.gpu:                                             # the real model needs real point clouds
+            test_env["LAL_SMOKE_FRAMES_DIR"] = str(ROOT / "data" / "raw" / "training" / "velodyne" / "0000")
         log("running tests/smoke through nginx")
         code = subprocess.run([sys.executable, "-m", "pytest", "-m", "smoke", "tests/smoke", "-v", "-s",
-                               "-p", "no:cacheprovider"], check=False, cwd=ROOT, env=test_env).returncode
+                               "-p", "no:cacheprovider", "-p", "no:randomly"],      # the smoke tests run in file order
+                              check=False, cwd=ROOT, env=test_env).returncode
         log(f"tests finished with exit code {code}")
     except (subprocess.CalledProcessError, RuntimeError) as exc:
         log(f"the stack did not come up: {exc}")
