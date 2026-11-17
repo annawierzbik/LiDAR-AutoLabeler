@@ -100,6 +100,10 @@ class AnnotationSession:
         self._next_track_id = 0
         self.max_gap = MAX_GAP  # longest hole in a track that gets filled automatically
         self.revision = 0  # bumped by every change of the annotations (edit, undo, ...) -> autosave trigger
+        # which model produced the system boxes: {"detector_config_hash", "checkpoint_hash",
+        # "score_threshold"} of the detection-cache entry the session was built from; None for a
+        # manual session (no detector) and for sessions stored before it was recorded
+        self.detector: dict | None = None
         # What changed since the session was loaded, for stores that write only the difference
         # (PgSessionStore: frame rows and history rows). Whole-document stores ignore them.
         self.dirty_frames: set[int] = set()
@@ -339,6 +343,8 @@ class AnnotationSession:
             "undo": [step_to_dict(step) for step in self._undo],
             "redo": [step_to_dict(step) for step in self._redo],
         }
+        if self.detector is not None:
+            data["detector"] = dict(self.detector)
         if include_events:
             data["events"] = [asdict(e) for e in self.events]
         return data
@@ -355,15 +361,19 @@ class AnnotationSession:
             s.frames[int(f)] = [Annotation.from_dict(a) for a in anns]
         s.events = [Event(**e) for e in data.get("events", [])]
         s.revision = int(data.get("revision", 0))
+        s.detector = dict(data["detector"]) if data.get("detector") is not None else None
         s._undo = [_step_from_dict(d) for d in data.get("undo", [])][-UNDO_LIMIT:]
         s._redo = [_step_from_dict(d) for d in data.get("redo", [])][-UNDO_LIMIT:]
         return s
 
     def metadata(self) -> dict:
         """The document without frames, history and events (stores that keep those apart)."""
-        return {"version": SESSION_VERSION, "sequence": self.sequence, "mode": self.mode,
-                "frame_offset": self.frame_offset, "num_frames": self.num_frames,
-                "next_track_id": self._next_track_id}
+        out = {"version": SESSION_VERSION, "sequence": self.sequence, "mode": self.mode,
+               "frame_offset": self.frame_offset, "num_frames": self.num_frames,
+               "next_track_id": self._next_track_id}
+        if self.detector is not None:
+            out["detector"] = dict(self.detector)
+        return out
 
     def history_dicts(self) -> dict[str, list[dict]]:
         """{"undo": [step, ...], "redo": [...]}, oldest first, each step {"label", "frames"}."""

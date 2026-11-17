@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     upload_max_bytes: int = 2 * 1024**3       # zip upload limit (compressed); 2 GiB
     upload_max_unpacked_bytes: int = 8 * 1024**3
     export_ttl_hours: float = 24.0            # stored export zips are deleted after this
+    detector_fingerprint_ttl_seconds: float = 90.0   # a GPU worker refreshes it every third of this
     export_prune_minutes: float = 15.0        # the scheduler (celery beat) deletes expired exports this often
     page_max: int = 200                       # largest page of a list endpoint
     assisted_mode: bool = True                # false without a GPU worker (cpu-only): assisted openings are refused

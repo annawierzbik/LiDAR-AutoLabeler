@@ -103,12 +103,21 @@ def _find_cached(name: str, want: range, meta: dict, allow_missing_weights: bool
         return None
     indices, results = parse_results(found[1])
     offset = want.start - indices.start
-    return want, results[offset: offset + len(want)]
+    return want, results[offset: offset + len(want)], found[1].get("meta")
 
 
 def has_split(args) -> bool:
     """KITTI sequences have a split; folders and uploads do not (it is not part of their cache meta)."""
     return not (args.folder or getattr(args, "blob_prefix", None))
+
+
+DETECTOR_FIELDS = ("detector_config_hash", "checkpoint_hash", "score_threshold")
+
+
+def detector_of(meta: dict | None) -> dict:
+    """What a session records about the model of its system boxes (from the cache entry's
+    metadata; all None for an entry written before cache metadata existed)."""
+    return {k: (meta or {}).get(k) for k in DETECTOR_FIELDS}
 
 
 def open_sequence(args):
@@ -159,7 +168,7 @@ def key_for_owner(key: str, sequence_label: str, owner: int) -> str:
     return owned_key(owner, f"training_{key}" if legacy else key)
 
 
-def new_session(args, seq, detect=None, detector: dict | None = None) -> AnnotationSession:
+def new_session(args, seq, detect=None, detector: dict | None = None, use_cache: bool = True) -> AnnotationSession:
     """A new session from cached detections, or after running detection + tracking (assisted), or
     empty (manual: no detector at all, so it works without a GPU). --start/--stop select a part.
 
@@ -167,7 +176,8 @@ def new_session(args, seq, detect=None, detector: dict | None = None) -> Annotat
     and returns when its result is in the detection cache; without it the detector runs here.
     `detector`: the fingerprint ({"detector_config_hash", "checkpoint_hash"}) of the model the GPU
     workers load, used instead of this process's files to decide whether the cache has a result
-    (a process without the weights, e.g. a cpu worker; infra.worker_detector.published_fingerprint)."""
+    (a process without the weights, e.g. a cpu worker; infra.worker_detector.published_fingerprint).
+    `use_cache=False`: do not judge the cache here (the model is unknown), go straight to `detect`."""
     label, name, legacy = file_names(args)
     stop = min(args.stop if args.stop is not None else len(seq), len(seq))
     want = range(args.start, stop)
@@ -183,14 +193,14 @@ def new_session(args, seq, detect=None, detector: dict | None = None) -> Annotat
         meta = current_meta(args.threshold, sequence_mode(seq, args.fov), split)
         if detector:
             meta.update({k: detector[k] for k in ("detector_config_hash", "checkpoint_hash")})
-        found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy)
+        found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy) if use_cache else None
         if found is None and detect is not None:
             detect(args)
             found = _find_cached(name, want, meta, args.use_cache_without_weights, legacy)
             if found is None:
                 raise RuntimeError("detection finished, but its result is not in the detection cache")
         if found is not None:
-            indices, results = found
+            indices, results, made_with = found
         else:
             from pipeline.detect_track import track_sequence, write_results
 
@@ -200,13 +210,16 @@ def new_session(args, seq, detect=None, detector: dict | None = None) -> Annotat
             blobs = results_blobs()
             key = cache_key_name(name, indices, len(seq))
             write_results(blobs, cache.output_key(blobs, key, meta), indices, results, meta)
+            made_with = meta
     session = AnnotationSession.from_tracking(
         label, results, args.mode, frame_offset=indices.start)
+    if args.mode != "manual":
+        session.detector = detector_of(made_with)
     print(f"New {args.mode} session with {session.stats()['total']} system boxes in {len(indices)} frames")
     return session
 
 
-def prepare(args, store, detect=None, detector: dict | None = None) -> tuple[object, str]:
+def prepare(args, store, detect=None, detector: dict | None = None, use_cache: bool = True) -> tuple[object, str]:
     """Make sure the session of `args` exists in `store`; returns (sequence, key).
 
     An existing session is resumed ("session_resume" is logged), one stored under its legacy key is
@@ -225,7 +238,7 @@ def prepare(args, store, detect=None, detector: dict | None = None) -> tuple[obj
         store.create(key, old)
         print(f"Resumed session {legacy} under its new name {key}")
         return seq, key
-    session = new_session(args, seq, detect, detector)
+    session = new_session(args, seq, detect, detector, use_cache)
     if store.exists(key):                                    # fresh: start over
         store.replace(key, session)
     else:

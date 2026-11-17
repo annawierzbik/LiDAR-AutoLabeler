@@ -159,8 +159,9 @@ def open_session(payload: dict, ctx: TaskContext) -> dict:
     def detect(a) -> None:
         raise NeedsDetection()
 
+    fingerprint = published_fingerprint()        # None: no GPU worker refreshed it lately (TTL)
     try:
-        return _open(payload, ctx, detect, published_fingerprint())
+        return _open(payload, ctx, detect, fingerprint, use_cache=fingerprint is not None)
     except NeedsDetection:
         nxt = ctx.submit("open_session_detect", payload, title="detection", reuse_done=opening_reusable)
         ctx.progress(1.0, "waiting for detection on the gpu queue")
@@ -180,7 +181,7 @@ def open_session_detect(payload: dict, ctx: TaskContext) -> dict:
     return _open(payload, ctx, detect, None)
 
 
-def _open(payload: dict, ctx: TaskContext, detect, detector: dict | None) -> dict:
+def _open(payload: dict, ctx: TaskContext, detect, detector: dict | None, use_cache: bool = True) -> dict:
     """Make sure the owner's session of the sequence exists (resume, manual, cached detections or
     `detect`) and return what a request needs to serve it."""
     from infra.settings import make_session_store
@@ -191,7 +192,7 @@ def _open(payload: dict, ctx: TaskContext, detect, detector: dict | None) -> dic
     if ctx.should_stop():
         raise JobCancelled("cancelled")
     try:
-        _, key = prepare(args, store, detect, detector)
+        _, key = prepare(args, store, detect, detector, use_cache)
     except (FileNotFoundError, ValueError) as exc:
         raise TaskFailed(str(exc)) from None
     if hasattr(store, "set_owner"):

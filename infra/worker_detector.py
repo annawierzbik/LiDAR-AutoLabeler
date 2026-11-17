@@ -27,20 +27,26 @@ _loaded = None     # the detector, once made
 
 FINGERPRINT_KEY = "lal:detector-fingerprint"
 FINGERPRINT = ("detector_config_hash", "checkpoint_hash")
-_fingerprint: dict | None = None      # thread mode (no Redis): published in this process
+_fingerprint: tuple[dict, float] | None = None   # thread mode (no Redis): (fingerprint, expiry), this process
+_heartbeat: threading.Thread | None = None
 
 
-def publish_fingerprint() -> dict | None:
+def publish_fingerprint(ttl: float | None = None) -> dict | None:
     """Make this process's model fingerprint known to processes without the weights (cpu workers
-    deciding whether an opening needs detection, review after phase 4): Redis key
-    FINGERPRINT_KEY in Celery mode, a module variable in thread mode. A process without the
-    weights publishes nothing. Called when a worker starts and by every gpu opening."""
+    deciding whether an opening needs detection): Redis key FINGERPRINT_KEY with a TTL
+    (LAL_DETECTOR_FINGERPRINT_TTL_SECONDS) in Celery mode, a module variable with the same expiry
+    in thread mode. A process without the weights publishes nothing. The TTL makes a stopped or
+    reconfigured worker's fingerprint disappear, so openings no longer use that model's cache;
+    a running GPU worker refreshes it (start_fingerprint_heartbeat)."""
     global _fingerprint
+    import time
+
     mine = worker_config()
     if mine["checkpoint_hash"] is None:
         return None
     fp = {k: mine[k] for k in FINGERPRINT}
     s = get_settings()
+    ttl = s.detector_fingerprint_ttl_seconds if ttl is None else ttl
     if s.job_queue == "celery" and s.redis_url:
         import json
 
@@ -48,13 +54,37 @@ def publish_fingerprint() -> dict | None:
 
         try:
             redis.Redis.from_url(s.redis_url, socket_timeout=3, socket_connect_timeout=3).set(
-                FINGERPRINT_KEY, json.dumps(fp))
+                FINGERPRINT_KEY, json.dumps(fp), px=max(1, int(ttl * 1000)))
         except redis.RedisError as exc:
             log.warning("could not publish the detector fingerprint: %s", exc)
             return None
     else:
-        _fingerprint = fp
+        _fingerprint = (fp, time.time() + ttl)
     return fp
+
+
+def start_fingerprint_heartbeat(ttl: float | None = None) -> threading.Thread | None:
+    """In a process that has the weights: publish the fingerprint now and again every third of
+    its TTL, in a daemon thread (also while a long detection runs). None if there is nothing to
+    publish. Called when a Celery worker starts."""
+    global _heartbeat
+    s = get_settings()
+    ttl = s.detector_fingerprint_ttl_seconds if ttl is None else ttl
+    if publish_fingerprint(ttl) is None:
+        return None
+    stop = threading.Event()
+
+    def beat():
+        while not stop.wait(ttl / 3):
+            try:
+                publish_fingerprint(ttl)
+            except Exception:
+                log.exception("refreshing the detector fingerprint failed")
+
+    _heartbeat = threading.Thread(target=beat, name="detector-fingerprint", daemon=True)
+    _heartbeat.stop = stop
+    _heartbeat.start()
+    return _heartbeat
 
 
 def published_fingerprint() -> dict | None:
@@ -72,7 +102,11 @@ def published_fingerprint() -> dict | None:
             log.warning("could not read the detector fingerprint: %s", exc)
             return None
         return json.loads(raw) if raw else None
-    return _fingerprint
+    import time
+
+    if _fingerprint is None or _fingerprint[1] <= time.time():
+        return None
+    return _fingerprint[0]
 
 
 class DetectorMismatch(Exception):

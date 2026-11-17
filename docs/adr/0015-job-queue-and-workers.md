@@ -20,10 +20,16 @@ Status: accepted (phase 3)
   the job the chain is at. So an opening that needs no detection never waits behind detection
   jobs. Whether the cache has a result depends on the model, which only GPU workers have on disk:
   a worker that has the weights publishes its fingerprint (`detector_config_hash`,
-  `checkpoint_hash`; Redis key `lal:detector-fingerprint`) when it starts and at every gpu
-  opening (`infra.worker_detector.publish_fingerprint`); the cpu step compares the cache with it.
-  Without a published fingerprint (no GPU worker has started, Redis unreachable) the cpu step
-  hands over to the gpu queue, where the worker decides itself. `open_session_manual` remains as
+  `checkpoint_hash`; Redis key `lal:detector-fingerprint`) with a TTL
+  (`LAL_DETECTOR_FINGERPRINT_TTL_SECONDS`, 90 s) that a daemon thread of the worker refreshes every
+  third of it, like a heartbeat, and again at every gpu opening
+  (`infra.worker_detector.start_fingerprint_heartbeat`, `publish_fingerprint`); the cpu step
+  compares the cache with it. A stopped or reconfigured worker's fingerprint expires, so the cpu
+  step no longer builds from that model's cache. Without a published fingerprint (no GPU worker
+  alive, Redis unreachable) the cpu step does not judge the cache at all and hands over to the
+  gpu queue, where the worker decides itself. Every assisted session records which model made its
+  system boxes (`AnnotationSession.detector`: `detector_config_hash`, `checkpoint_hash`,
+  `score_threshold` of the cache entry it was built from; stored in the session metadata). `open_session_manual` remains as
   an alias of the cpu step for jobs queued before. Exports run only as tasks
   (`POST /api/v1/tabs/<sid>/exports`, `GET /api/v1/jobs/<id>`, `GET /api/v1/jobs/<id>/download`,
   ADR 0018). Before phase 4 an opening was a thread of the API process that waited for a

@@ -240,3 +240,13 @@ def test_assign_session_owner_script(pg_url, pg_engine, monkeypatch, capsys):
     assert store.owner(f"u{uid}_training_0000_assisted") == uid
     assert main(["anna", "--all"]) == 0 and store.unowned() == []
     assert store.owner(f"u{uid}_testing_0001_manual") == uid
+
+
+
+def test_the_detector_of_a_session_is_stored_with_its_metadata(pg_engine):
+    store = PgSessionStore(pg_engine)
+    s = AnnotationSession.from_tracking("0000", [[box(10)], [box(11)]])
+    s.detector = {"detector_config_hash": "abc", "checkpoint_hash": "def", "score_threshold": 0.5}
+    store.create("with_detector", s)
+    store.create("without", AnnotationSession.from_tracking("0000", [[box(10)]]))
+    assert store.load("with_detector").detector == s.detector and store.load("without").detector is None

@@ -348,10 +348,56 @@ def test_an_opening_needs_the_gpu_queue_only_for_real_detection(env, monkeypatch
         assert "next_job" not in resumed.result and resumed.result["session_key"] == built.result["session_key"]
         if wd.worker_config()["checkpoint_hash"] is None:
             pytest.skip("the cache-hit half needs the weights on disk (their hash is the fingerprint)")
-        monkeypatch.setattr(wd, "_fingerprint", {k: wd.worker_config()[k] for k in wd.FINGERPRINT})
+        monkeypatch.setattr(wd, "_fingerprint", ({k: wd.worker_config()[k] for k in wd.FINGERPRINT}, time.time() + 60))
         other = q.status(q.submit("open_session", open_payload(env, owner=6), reuse_done=opening_reusable))   # cache hit for this model
         assert "next_job" not in other.result and other.result["session_key"].startswith("u6_")
-        monkeypatch.setattr(wd, "_fingerprint", {"detector_config_hash": "x", "checkpoint_hash": "y"})
+        monkeypatch.setattr(wd, "_fingerprint", ({"detector_config_hash": "x", "checkpoint_hash": "y"}, time.time() + 60))
         third = q.status(q.submit("open_session", open_payload(env, owner=7), reuse_done=opening_reusable))   # another model: detect
         assert third.result.get("next_job")
     assert tests.fakes.LOADS == 1                                         # the third did not run its detection here
+
+
+
+def test_an_expired_fingerprint_sends_openings_back_to_the_gpu_queue(env, monkeypatch):
+    """A worker that stopped refreshing its fingerprint (stopped, or restarted with another model)
+    must not keep cpu openings building from its model's cache: after the TTL nothing is published."""
+    from unittest import mock
+
+    import infra.worker_detector as wd
+    from infra.sessions import FileSessionStore
+    from infra.tasks import opening_reusable
+
+    if wd.worker_config()["checkpoint_hash"] is None:
+        pytest.skip("needs the weights on disk (their hash is the fingerprint)")
+    store = FileSessionStore(env.results / "sessions")
+    q = ThreadTaskQueue(background=False)
+    with mock.patch("infra.settings.make_session_store", return_value=store):
+        chain(q, q.submit("open_session", open_payload(env, owner=8), reuse_done=opening_reusable))   # cache made
+        assert wd.publish_fingerprint(ttl=0.3) is not None and wd.published_fingerprint() is not None
+        hit = q.status(q.submit("open_session", open_payload(env, owner=9), reuse_done=opening_reusable))
+        assert "next_job" not in hit.result                                  # fresh fingerprint: built on cpu
+        time.sleep(0.4)
+        assert wd.published_fingerprint() is None                            # expired
+        miss = q.status(q.submit("open_session", open_payload(env, owner=10), reuse_done=opening_reusable))
+        assert miss.result.get("next_job")                                   # back to the gpu queue
+
+
+def test_the_session_records_which_detector_made_its_boxes(env):
+    from unittest import mock
+
+    from infra.sessions import FileSessionStore
+    from infra.worker_detector import worker_config
+    from verification.session import AnnotationSession
+
+    store = FileSessionStore(env.results / "sessions")
+    q = ThreadTaskQueue(background=False)
+    with mock.patch("infra.settings.make_session_store", return_value=store):
+        assisted = chain(q, q.submit("open_session", open_payload(env, owner=11)))
+        manual = chain(q, q.submit("open_session", open_payload(env, owner=11, mode="manual")))
+    mine = worker_config()
+    made = store.load(assisted.result["session_key"]).detector
+    assert made == {"detector_config_hash": mine["detector_config_hash"], "checkpoint_hash": mine["checkpoint_hash"],
+                    "score_threshold": 0.5}
+    assert store.load(manual.result["session_key"]).detector is None            # no detector in manual mode
+    again = AnnotationSession.from_dict(store.load(assisted.result["session_key"]).to_dict())
+    assert again.detector == made and AnnotationSession.from_dict({**again.to_dict(), "detector": None}).detector is None

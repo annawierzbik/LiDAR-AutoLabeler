@@ -167,9 +167,9 @@ def _recover_on_start(sender=None, **_) -> None:
     """A starting worker requeues jobs whose worker died and sends queued jobs again (a lost broker
     message must not leave a job queued forever; a duplicate message is harmless)."""
     try:
-        from infra.worker_detector import publish_fingerprint
+        from infra.worker_detector import start_fingerprint_heartbeat
 
-        publish_fingerprint()                  # only a worker that has the weights publishes
+        start_fingerprint_heartbeat()          # only a worker that has the weights publishes (and refreshes)
     except Exception:
         log.exception("publishing the detector fingerprint failed")
     try:
