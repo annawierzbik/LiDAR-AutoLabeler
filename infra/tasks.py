@@ -72,8 +72,9 @@ def detect_track_payload(args) -> dict:
     """The JSON payload of a detect_track job for session-builder arguments."""
     out = {k: getattr(args, k) for k in ("folder", "data_root", "split", "sequence", "start", "stop", "threshold",
                                         "fov", "use_cache_without_weights")}
-    if getattr(args, "blob_prefix", None):
-        out["blob_prefix"] = args.blob_prefix
+    for k in ("blob_prefix", "frames"):                  # an API sequence: its storage and frame list
+        if getattr(args, k, None):
+            out[k] = getattr(args, k)
     return out
 
 

@@ -68,21 +68,25 @@ class BlobSequence:
 
 def open_blob_sequence(args) -> BlobSequence:
     """The sequence of session-builder arguments (an upload's blob prefix, --folder, or
-    --data-root/--split/--sequence)."""
+    --data-root/--split/--sequence). `frames` (the ordered frame file names stored with an API
+    sequence) is used as it is: nothing is listed."""
     from ingestion.folder import frame_files
 
-    prefix = getattr(args, "blob_prefix", None)
+    prefix, names = getattr(args, "blob_prefix", None), getattr(args, "frames", None)
     if prefix:
         from infra.storage import uploads_store
 
         blobs = uploads_store()
-        keys = upload_frame_keys(blobs, prefix)
+        keys = [f"{prefix}/{n}" for n in names] if names else upload_frame_keys(blobs, prefix)
         if not keys:
             raise FileNotFoundError(f"the upload {prefix} has no frames (was it deleted?)")
         return BlobSequence(prefix, blobs, keys)
     if args.folder:
         folder = Path(args.folder)
-        return BlobSequence(folder.name, LocalBlobStore(folder), [p.name for p in frame_files(folder)])
+        if not folder.is_dir():
+            raise FileNotFoundError(f"{folder} is not a folder")
+        return BlobSequence(folder.name, LocalBlobStore(folder), list(names) if names
+                            else [p.name for p in frame_files(folder)])
     root = Path(args.data_root) / args.split
     velodyne = root / "velodyne" / args.sequence
     if not velodyne.is_dir():

@@ -111,27 +111,31 @@ def _lock(svc: Services, ready: Ready, user: Principal, client: str) -> None:
         raise ApiError(409, f"session {ready.key} no longer exists", code="not_ready") from None
 
 
-_UPLOAD_KEYS: dict[str, list[str]] = {}       # an upload's frame keys never change: listed once per process
+_LISTED: dict[str, list[str]] = {}      # sequences stored without "frames" (before the review of phase 4)
 
 
 def _points(spec: dict):
-    """The point clouds of a sequence spec: an upload in the uploads blob area, or a folder."""
+    """The point clouds of a sequence spec, by the ordered frame names stored with the sequence
+    (`spec["frames"]`); nothing is listed per request. Sequences stored without them are listed
+    once per process."""
     from infra.blob import LocalBlobStore
     from infra.points import BlobPointSource
     from ingestion.folder import frame_files
 
-    prefix = spec.get("blob_prefix")
+    prefix, names = spec.get("blob_prefix"), spec.get("frames")
     if prefix:
         from infra.sequences import upload_frame_keys
         from infra.storage import uploads_store
 
         blobs = uploads_store()
-        keys = _UPLOAD_KEYS.get(prefix)
-        if keys is None:
-            keys = _UPLOAD_KEYS[prefix] = upload_frame_keys(blobs, prefix)
-        return BlobPointSource(blobs, keys)
+        if names is None:
+            names = _LISTED.get(prefix) or _LISTED.setdefault(
+                prefix, [k[len(prefix) + 1:] for k in upload_frame_keys(blobs, prefix)])
+        return BlobPointSource(blobs, [f"{prefix}/{n}" for n in names])
     folder = spec["folder"]
-    return BlobPointSource(LocalBlobStore(folder), [p.name for p in frame_files(folder)])
+    if names is None:
+        names = _LISTED.get(folder) or _LISTED.setdefault(folder, [p.name for p in frame_files(folder)])
+    return BlobPointSource(LocalBlobStore(folder), list(names))
 
 
 def review(svc: Services, sid: str, user: Principal, client: str) -> ReviewService:

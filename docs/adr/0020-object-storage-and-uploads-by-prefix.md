@@ -27,6 +27,12 @@ share those folders. Containers on several hosts cannot.
   natural order of `ingestion.folder.frame_files`. The API serves points from the same keys (listed
   once per process; an upload never changes). `validate_upload` repeats the checks of
   `validate_folder` on blobs. The zip itself is only a temporary file of the API process.
+- **Frame list stored with the sequence** (review after phase 4): when a sequence is made (upload
+  or registration) its frame file names are listed once, in frame order, and stored in its spec
+  (`"frames"`). The session builder takes them as the hidden argument `frames`, so the API (points,
+  state), the cpu and gpu opening steps, detection and export all use that list and never list a
+  folder or the bucket again; a file added to a registered folder later is not part of the
+  sequence. Sequences stored without the list (older rows) are listed once per process.
 - **Export frame names**: `export/session_export.py: sequence_info` takes the names from the
   loader's `frame_names` when it has them (a BlobSequence) and otherwise from its velodyne folder,
   as before; rendering is unchanged (decided with the user). Tested: an upload and the same frames

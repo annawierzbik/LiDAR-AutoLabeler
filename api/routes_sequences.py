@@ -108,7 +108,11 @@ async def upload_sequence(request: Request, name: Annotated[str, Query(min_lengt
             raise ApiError(400, str(exc)) from None
     finally:
         Path(tmp).unlink(missing_ok=True)
-    return svc.sequences.add(name.strip(), "upload", prefix, {"blob_prefix": prefix}, frames, user.id)
+    from infra.sequences import upload_frame_keys
+
+    names = [k[len(prefix) + 1:] for k in await run_in_threadpool(upload_frame_keys, blobs, prefix)]   # listed once
+    return svc.sequences.add(name.strip(), "upload", prefix, {"blob_prefix": prefix, "frames": names}, frames,
+                             user.id)
 
 
 @router.post("/sequences/register", status_code=201, response_model=SequenceView, responses=responses(400, 403, 404))
@@ -123,7 +127,11 @@ def register_sequence(body: Register, admin: AdminUser, svc: Svc):
     owner = body.owner_id if body.owner_id is not None else admin.id
     if svc.users.get(owner) is None:
         raise not_found("user", owner)
-    return svc.sequences.add(body.name or folder.name, "folder", str(folder), {"folder": str(folder)}, frames, owner)
+    from ingestion.folder import frame_files
+
+    names = [p.name for p in frame_files(folder)]                     # listed once, at registration
+    return svc.sequences.add(body.name or folder.name, "folder", str(folder), {"folder": str(folder), "frames": names},
+                             frames, owner)
 
 
 class Deleted(BaseModel):

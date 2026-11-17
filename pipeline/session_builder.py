@@ -25,6 +25,7 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--folder", default=None,
                    help="any folder with KITTI-style .bin frames (overrides --data-root/--split/--sequence)")
     p.add_argument("--blob-prefix", default=None, help=argparse.SUPPRESS)   # an upload in the uploads blob area (API)
+    p.add_argument("--frames", default=None, help=argparse.SUPPRESS)   # frame file names in order, stored with the sequence
     p.add_argument("--mode", choices=["assisted", "manual"], default="assisted")
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--stop", type=int, default=None, help="exclusive; default = whole sequence")
@@ -112,7 +113,7 @@ def has_split(args) -> bool:
 
 def open_sequence(args):
     """The SequenceLoader (KITTI), FolderSequence (--folder) or BlobSequence (an upload) of `args`."""
-    if getattr(args, "blob_prefix", None):
+    if getattr(args, "blob_prefix", None) or getattr(args, "frames", None):
         from infra.sequences import open_blob_sequence
 
         return open_blob_sequence(args)

@@ -47,7 +47,8 @@ def test_upload_writes_the_frames_into_the_blob_store(api, anna):
     assert seq["name"] == "my drive" and seq["num_frames"] == FRAMES and seq["source"] == "upload"
     [prefix] = uploads(api)
     assert sorted(os.listdir(api.svc.settings.uploads_dir / prefix)) == [f"{i:06d}.bin" for i in range(FRAMES)]
-    assert api.svc.sequences.get(seq["id"], None)["spec"] == {"blob_prefix": prefix}   # a prefix, not a path
+    spec = api.svc.sequences.get(seq["id"], None)["spec"]
+    assert spec == {"blob_prefix": prefix, "frames": [f"{i:06d}.bin" for i in range(FRAMES)]}   # a prefix, not a path
     assert set(glob.glob(os.path.join(tempfile.gettempdir(), "lal-upload-*"))) == temp  # the archive is not kept
 
 
@@ -248,3 +249,37 @@ def test_registered_folders_are_not_deleted(api, admin):
     r = admin.delete(f"/api/v1/sequences/{seq['id']}?force=true")
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_an_upload"
     assert (api.env.data_root / "drive_a").is_dir()
+
+
+
+@pytest.mark.parametrize("source", ["upload", "folder"])
+def test_frames_are_listed_once_when_the_sequence_is_made(api, anna, monkeypatch, source):
+    """The ordered frame names are stored with the sequence (spec["frames"]); opening (cpu and gpu
+    steps), points, state and export use them: after creation nothing lists the frames again, and a
+    file added to a registered folder later does not change the sequence."""
+    import infra.sequences
+    import ingestion.folder
+
+    api.user("boss", "admin")
+    admin = api.login("boss", "tab-cccccccc")
+    if source == "upload":
+        seq = anna.upload(frames_zip()).json()
+    else:
+        seq = admin.post("/api/v1/sequences/register", {"path": "drive_a", "owner_id": anna.user["id"]}).json()
+        (api.env.data_root / "drive_a" / "zzz_added_later.bin").write_bytes(FRAME)
+    assert len(api.svc.sequences.get(seq["id"], None)["spec"]["frames"]) == FRAMES
+
+    def no_listing(*a, **k):
+        raise AssertionError("frames listed after the sequence was made")
+
+    monkeypatch.setattr(infra.sequences, "upload_frame_keys", no_listing)
+    monkeypatch.setattr(ingestion.folder, "frame_files", no_listing)
+    monkeypatch.setattr("export.session_export.frame_files", no_listing)
+    sid = api.open_tab(anna, seq["id"], "assisted")                     # cpu step, then detection on gpu
+    st = anna.get(f"/api/v1/tabs/{sid}/state?frame=0").json()
+    assert st["num_frames"] == FRAMES
+    assert anna.get(f"/api/v1/tabs/{sid}/points/{FRAMES - 1}").status_code == 200
+    assert anna.get(f"/api/v1/tabs/{sid}/points/{FRAMES}").status_code == 404   # the added file is not a frame
+    eid = anna.post(f"/api/v1/tabs/{sid}/exports", {"format": "lidar", "include_unreviewed": True}).json()["job_id"]
+    assert api.drain() == ["done"]
+    assert anna.get(f"/api/v1/jobs/{eid}/download").status_code == 200
