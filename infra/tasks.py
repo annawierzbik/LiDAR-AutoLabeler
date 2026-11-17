@@ -176,6 +176,8 @@ def prune_exports(blobs: BlobStore, now: float) -> list[str]:
 def export(payload: dict, ctx: TaskContext) -> dict:
     """payload: session_key, revision (so an export of an older state is not reused), sequence
     (session-builder arguments), format, include_unreviewed, include_empty, job_id.
+    The session is loaded when the job runs: the result's `revision` is the revision actually
+    exported (it is newer than `requested_revision` if the session changed while the job waited).
     The zip is kept for LAL_EXPORT_TTL_HOURS; every export run deletes the expired ones."""
     import time
 
@@ -201,6 +203,7 @@ def export(payload: dict, ctx: TaskContext) -> dict:
     key = export_key(expires_at, payload["job_id"], result.archive_name)
     blobs.put(key, data)
     return {"blob": key, "archive_name": result.archive_name, "bytes": len(data), "expires_at": int(expires_at),
+            "revision": session.revision, "requested_revision": payload.get("revision"),
             "summary": result.summary.to_dict()}
 
 

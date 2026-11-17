@@ -233,3 +233,18 @@ def test_openapi_lists_the_v1_endpoints(api):
             "/readyz", "/api/v1/sequences/upload", "/api/v1/sequences/register"} <= paths
     assert not any(p.startswith("/api/") and not p.startswith("/api/v1/") for p in paths)
     assert "ErrorResponse" in spec["components"]["schemas"]
+
+
+def test_the_export_result_records_the_revision_actually_exported(api, anna):
+    seq = upload(anna)
+    sid = api.open_tab(anna, seq["id"])
+    anna.post(f"/api/v1/tabs/{sid}/action", {"name": "add", "frame": 0, "label": "Car"})
+    requested = anna.get(f"/api/v1/tabs/{sid}/state?frame=0").json()["revision"]
+    eid = anna.post(f"/api/v1/tabs/{sid}/exports", {"format": "lidar"}).json()["job_id"]
+    anna.post(f"/api/v1/tabs/{sid}/action", {"name": "add", "frame": 1, "label": "Car"})   # while it waits
+    now = anna.get(f"/api/v1/tabs/{sid}/state?frame=0").json()["revision"]
+    assert now > requested
+    assert api.drain() == ["done"]
+    result = anna.get(f"/api/v1/jobs/{eid}").json()["result"]
+    assert result["requested_revision"] == requested and result["revision"] == now
+    assert result["summary"]["boxes"] == 2                              # the exported state is that revision
