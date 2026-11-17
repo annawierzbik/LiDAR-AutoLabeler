@@ -303,3 +303,13 @@ def test_the_scheduler_prunes_exports_periodically(tmp_path, monkeypatch):
         blobs.put(k, b"zip")
     monkeypatch.setattr(infra.tasks, "export_blobs", lambda: blobs)
     assert ca.prune_exports_task() == 1 and blobs.list() == [new]
+
+
+def test_thread_queue_reuses_a_done_job_only_if_reuse_done_accepts_it():
+    from infra.jobs import ThreadTaskQueue
+
+    q = ThreadTaskQueue(background=False, tasks={"t": ("cpu", lambda payload, ctx: {"n": 1})})
+    a = q.submit("t", {"x": 1})
+    assert q.submit("t", {"x": 1}, reuse_done=lambda r: r["n"] == 1) == a
+    b = q.submit("t", {"x": 1}, reuse_done=lambda r: False)
+    assert b != a and q.status(b).state == "done"

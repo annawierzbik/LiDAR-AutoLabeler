@@ -248,3 +248,36 @@ def test_the_export_result_records_the_revision_actually_exported(api, anna):
     result = anna.get(f"/api/v1/jobs/{eid}").json()["result"]
     assert result["requested_revision"] == requested and result["revision"] == now
     assert result["summary"]["boxes"] == 2                              # the exported state is that revision
+
+
+@pytest.mark.parametrize("gone", ["pruned", "expired"])
+def test_an_export_can_be_repeated_after_its_zip_is_gone(api, anna, monkeypatch, gone):
+    """An unchanged session exported again after the zip was pruned (blob deleted) or expired
+    gets a new job, not the old done job whose download answers 410."""
+    from infra.tasks import export_blobs
+
+    seq = upload(anna)
+    sid = api.open_tab(anna, seq["id"])
+    anna.post(f"/api/v1/tabs/{sid}/action", {"name": "add", "frame": 0, "label": "Car"})
+    first = anna.post(f"/api/v1/tabs/{sid}/exports", {"format": "lidar"}).json()["job_id"]
+    assert api.drain() == ["done"]
+    assert anna.get(f"/api/v1/jobs/{first}/download").status_code == 200
+    assert anna.post(f"/api/v1/tabs/{sid}/exports", {"format": "lidar"}).json()["job_id"] == first   # still there
+    if gone == "pruned":
+        export_blobs().delete(anna.get(f"/api/v1/jobs/{first}").json()["result"]["blob"])
+    else:
+        import types
+
+        import infra.tasks
+        from api import routes_jobs
+
+        expires = anna.get(f"/api/v1/jobs/{first}").json()["result"]["expires_at"]
+        later = types.SimpleNamespace(time=lambda: expires + 1)        # login tokens keep the real clock
+        monkeypatch.setattr(routes_jobs, "time", later)               # the download sees the expiry ...
+        monkeypatch.setattr(infra.tasks.export_reusable, "__defaults__", (expires + 1,))   # ... and the submit
+    assert anna.get(f"/api/v1/jobs/{first}/download").status_code == 410
+    again = anna.post(f"/api/v1/tabs/{sid}/exports", {"format": "lidar"}).json()["job_id"]
+    assert again != first
+    monkeypatch.undo()
+    assert api.drain() == ["done"]
+    assert anna.get(f"/api/v1/jobs/{again}/download").status_code == 200

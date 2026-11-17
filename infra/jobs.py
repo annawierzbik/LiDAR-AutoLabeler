@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -35,9 +36,11 @@ class JobStatus:
 # ------------------------------------------------------------------- task queues
 @runtime_checkable
 class TaskQueue(Protocol):
-    def submit(self, kind: str, payload: dict, title: str = "") -> str:
+    def submit(self, kind: str, payload: dict, title: str = "",
+               reuse_done: Callable[[dict | None], bool] | None = None) -> str:
         """Queue task `kind` (infra.tasks.TASKS) with a JSON payload; returns the job id. A payload
-        identical to a queued, running or finished job's returns that job (no second run)."""
+        identical to a queued, running or finished job's returns that job (no second run); a
+        finished job only if `reuse_done(result)` is true (default: always)."""
 
     def status(self, job_id: str) -> JobStatus:
         """KeyError for unknown ids."""
@@ -75,7 +78,8 @@ class ThreadTaskQueue:
         self._dedupe: dict[str, str] = {}
         self._mutex = threading.Lock()
 
-    def submit(self, kind: str, payload: dict, title: str = "") -> str:
+    def submit(self, kind: str, payload: dict, title: str = "",
+               reuse_done: Callable[[dict | None], bool] | None = None) -> str:
         from infra.tasks import dedupe_key
 
         if kind not in self.tasks:
@@ -84,7 +88,9 @@ class ThreadTaskQueue:
         with self._mutex:
             old = self._dedupe.get(dkey)
             if old is not None and self._jobs[old].state not in ("failed", "cancelled"):
-                return old
+                done = self._jobs[old].state == "done"
+                if not (done and reuse_done is not None and not reuse_done(self._jobs[old].result)):
+                    return old
             job_id = uuid.uuid4().hex[:12]
             job = self._jobs[job_id] = JobStatus(job_id, title, kind=kind)
             self._stops[job_id] = threading.Event()

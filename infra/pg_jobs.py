@@ -38,14 +38,17 @@ class PgJobStore:
         return dt.datetime.fromtimestamp(self._clock(), dt.UTC)
 
     # --------------------------------------------------------------- API side
-    def create(self, kind: str, queue: str, payload: dict, title: str, dedupe: str) -> tuple[str, bool]:
+    def create(self, kind: str, queue: str, payload: dict, title: str, dedupe: str,
+               reuse_done: Callable[[dict | None], bool] | None = None) -> tuple[str, bool]:
         """(job id, True if a new job was made). A queued, running, cancelling or done job with the
-        same dedupe key is returned instead of a new one. The partial unique index
-        ux_jobs_active_cache_key (migration 0005) allows one queued or running job per key, so of
-        two concurrent requests one inserts and the other gets that job."""
+        same dedupe key is returned instead of a new one; a done job only if `reuse_done(result)`
+        says its result can still serve the request (default: always; e.g. an export whose zip
+        expired cannot). The partial unique index ux_jobs_active_cache_key (migration 0005) allows
+        one queued or running job per key, so of two concurrent requests one inserts and the other
+        gets that job."""
         for _ in range(3):
             with self.engine.begin() as c:
-                old = self._existing(c, dedupe)
+                old = self._existing(c, dedupe, reuse_done)
                 if old is not None:
                     return old, False
                 job_id = uuid.uuid4().hex[:12]
@@ -64,10 +67,13 @@ class PgJobStore:
         raise RuntimeError(f"could not create or find a job for key {dedupe}")
 
     @staticmethod
-    def _existing(c, dedupe: str) -> str | None:
-        return c.execute(select(JobRow.id).where(JobRow.cache_key == dedupe,
-                                                 JobRow.state.notin_(("failed", "cancelled")))
-                         .order_by(JobRow.created_at.desc()).limit(1)).scalar()
+    def _existing(c, dedupe: str, reuse_done=None) -> str | None:
+        row = c.execute(select(JobRow.id, JobRow.state, JobRow.result)
+                        .where(JobRow.cache_key == dedupe, JobRow.state.notin_(("failed", "cancelled")))
+                        .order_by(JobRow.created_at.desc()).limit(1)).first()
+        if row is None or (row.state == "done" and reuse_done is not None and not reuse_done(row.result)):
+            return None
+        return row.id
 
     VIEW = (JobRow.id, JobRow.kind, JobRow.title, JobRow.state, JobRow.progress, JobRow.message, JobRow.result,
             JobRow.attempts, JobRow.owner_id, JobRow.created_at, JobRow.finished_at)

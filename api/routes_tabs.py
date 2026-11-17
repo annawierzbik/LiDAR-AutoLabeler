@@ -21,7 +21,7 @@ from api.deps import ClientId, CurrentUser, Page, Services, Svc, owner_filter
 from api.errors import ApiError, not_found, responses
 from infra.auth import Principal
 from infra.sessions import RevisionConflict, SessionLocked, SessionNotFound
-from infra.tasks import open_session_kind, open_session_payload
+from infra.tasks import export_reusable, open_session_kind, open_session_payload
 from web.service import ReviewService, UnknownAction, point_bytes
 
 router = APIRouter(prefix="/api/v1", tags=["tabs"])
@@ -270,7 +270,8 @@ def export(sid: str, r: ExportRequest, user: CurrentUser, client: ClientId,
     payload = {"session_key": ready.key, "revision": svc.sessions.stored_revision(ready.key),
                "owner_id": seq["owner_id"], "sequence": vars(make_args(**seq["spec"])), "format": r.format,
                "include_unreviewed": r.include_unreviewed, "include_empty": r.include_empty}
-    job_id = svc.queue.submit("export", payload, title=f"export {seq['name']} ({r.format})")
+    job_id = svc.queue.submit("export", payload, title=f"export {seq['name']} ({r.format})",
+                              reuse_done=export_reusable)
     return {"job_id": job_id}
 
 

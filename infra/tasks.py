@@ -173,6 +173,21 @@ def prune_exports(blobs: BlobStore, now: float) -> list[str]:
     return gone
 
 
+EXPORT_REUSE_MARGIN = 60.0     # a reused export must stay downloadable at least this long (seconds)
+
+
+def export_reusable(result: dict | None, now: float | None = None) -> bool:
+    """Whether a finished export can serve a new request for the same session state: its zip has
+    not expired (with EXPORT_REUSE_MARGIN to spare) and was not pruned. Otherwise the request
+    makes a new export job (review after phase 4)."""
+    import time
+
+    if not result or "blob" not in result:
+        return False
+    now = time.time() if now is None else now
+    return result.get("expires_at", 0) > now + EXPORT_REUSE_MARGIN and export_blobs().exists(result["blob"])
+
+
 def export(payload: dict, ctx: TaskContext) -> dict:
     """payload: session_key, revision (so an export of an older state is not reused), sequence
     (session-builder arguments), format, include_unreviewed, include_empty, job_id.

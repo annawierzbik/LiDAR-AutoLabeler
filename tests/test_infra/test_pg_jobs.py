@@ -128,8 +128,8 @@ def test_two_concurrent_requests_get_one_job(jobs, pg_engine):
     real = PgJobStore._existing
     calls = []
 
-    def existing(c, dedupe):
-        found = real(c, dedupe)
+    def existing(c, dedupe, reuse_done=None):
+        found = real(c, dedupe, reuse_done)
         calls.append(found)
         if len(calls) <= 2:
             both_looked.wait()                                       # neither has inserted yet
@@ -187,3 +187,14 @@ def test_migration_0005_keeps_the_newest_of_duplicate_active_jobs(pg_url, pg_eng
         rows = dict(c.execute(select(JobRow.id, JobRow.state).where(JobRow.cache_key == "dup")).all())
         msg = c.execute(select(JobRow.message).where(JobRow.id == "d0")).scalar()
     assert rows == {"d0": "failed", "d1": "failed", "d2": "queued"} and "superseded by job d2" in msg
+
+
+def test_a_done_job_is_reused_only_while_reuse_done_accepts_its_result(jobs):
+    store, _ = jobs
+    a, _ = store.create("export", "cpu", {"r": 1}, "", "kr")
+    store.start(a, "w")
+    store.finish(a, {"blob": "x", "ok": True})
+    assert store.create("export", "cpu", {"r": 1}, "", "kr", reuse_done=lambda r: r["ok"]) == (a, False)
+    b, new = store.create("export", "cpu", {"r": 1}, "", "kr", reuse_done=lambda r: False)
+    assert new and b != a                                             # the result can no longer serve
+    assert store.create("export", "cpu", {"r": 1}, "", "kr", reuse_done=lambda r: False) == (b, False)  # b is queued

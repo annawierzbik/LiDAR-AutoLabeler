@@ -14,11 +14,12 @@ class CeleryTaskQueue:
             from infra.celery_app import dispatch as send
         self.store, self.send = store, send
 
-    def submit(self, kind: str, payload: dict, title: str = "") -> str:
+    def submit(self, kind: str, payload: dict, title: str = "",
+               reuse_done: Callable[[dict | None], bool] | None = None) -> str:
         if kind not in TASKS:
             raise KeyError(f"unknown task {kind!r}")
         queue = TASKS[kind][0]
-        job_id, created = self.store.create(kind, queue, payload, title, dedupe_key(kind, payload))
+        job_id, created = self.store.create(kind, queue, payload, title, dedupe_key(kind, payload), reuse_done)
         if created:
             self.send(job_id, queue)
         return job_id
